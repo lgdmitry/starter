@@ -4,3 +4,10 @@
 --
 vim.opt.fileencodings = "utf-8,cp1251"
 vim.g.lazyvim_rust_diagnostics = "rust-analyzer"
+
+-- Провайдеры не используются (плагинов на python/perl/ruby/node нет), а checkhealth
+-- на каждый ругается; для Python 3.14 без модуля neovim проверка ещё и падает.
+vim.g.loaded_node_provider = 0
+vim.g.loaded_perl_provider = 0
+vim.g.loaded_python3_provider = 0
+vim.g.loaded_ruby_provider = 0
