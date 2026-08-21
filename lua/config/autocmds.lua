@@ -6,3 +6,7 @@
 --
 -- Or remove existing autocmds by their group name (which is prefixed with `lazyvim_` for the defaults)
 -- e.g. vim.api.nvim_del_augroup_by_name("lazyvim_wrap_spell")
+--
+--vim.api.nvim_create_autocmd("DBDev", function()
+--  vim.cmd("DB sqlserver://tank22\\snickers/ics_ua97?trusted_connection=yes&integrated.security=true")
+--end, {})
