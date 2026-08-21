@@ -7,10 +7,6 @@
 -- Or remove existing autocmds by their group name (which is prefixed with `lazyvim_` for the defaults)
 -- e.g. vim.api.nvim_del_augroup_by_name("lazyvim_wrap_spell")
 --
---vim.api.nvim_create_autocmd("DBDev", function()
---  vim.cmd("DB sqlserver://tank22\\snickers/ics_ua97?trusted_connection=yes&integrated.security=true")
---end, {})
-
 -- Страховка от E138 "All main.shada.tmp.X files exist, cannot write ShaDa file".
 -- Neovim пишет shada не поверх main.shada, а во временный main.shada.tmp.<a-z>, и
 -- оставляет его, если процесс убили до переименования. Когда заняты все 26 букв, каждый
@@ -33,5 +29,52 @@ vim.api.nvim_create_autocmd("VimEnter", {
         end
       end
     end)
+  end,
+})
+
+-- Репозитории-зеркала T-SQL (c:/repo/dgsql, c:/repo/esql): .sql файлы там в cp1251 + CRLF.
+-- Раньше это задавал .editorconfig внутри dgsql, но charset=cp1251 нет в спецификации
+-- editorconfig — Neovim ругался на каждый открываемый файл. Из тех настроек здесь остались
+-- только те, которых нет в дефолтах: CRLF для новых файлов даёт виндовый fileformats=dos,unix,
+-- финальный перевод строки — fixeol, а кодировку новых файлов и обрезку хвостовых пробелов
+-- задаём сами. Только *.sql: разметка и json в .claude/ — utf-8, и хвостовые пробелы в
+-- markdown значимы (перенос строки).
+local sql_mirrors = { "/repo/dgsql/", "/repo/esql/" }
+
+local function in_sql_mirror(buf)
+  local path = vim.fs.normalize(vim.api.nvim_buf_get_name(buf)):lower()
+  for _, root in ipairs(sql_mirrors) do
+    if path:find(root, 1, true) then
+      return true
+    end
+  end
+  return false
+end
+
+local sql_mirror = vim.api.nvim_create_augroup("sql_mirror_repos", { clear = true })
+
+vim.api.nvim_create_autocmd("BufNewFile", {
+  group = sql_mirror,
+  pattern = "*.sql",
+  desc = "Новые .sql в зеркалах T-SQL создавать в cp1251 + CRLF",
+  callback = function(ev)
+    if in_sql_mirror(ev.buf) then
+      vim.bo[ev.buf].fileencoding = "cp1251"
+      vim.bo[ev.buf].fileformat = "dos"
+    end
+  end,
+})
+
+vim.api.nvim_create_autocmd("BufWritePre", {
+  group = sql_mirror,
+  pattern = "*.sql",
+  desc = "Обрезать хвостовые пробелы (было trim_trailing_whitespace в .editorconfig)",
+  callback = function(ev)
+    if not in_sql_mirror(ev.buf) then
+      return
+    end
+    local view = vim.fn.winsaveview()
+    vim.cmd([[silent! keeppatterns %s/\s\+$//e]])
+    vim.fn.winrestview(view)
   end,
 })
