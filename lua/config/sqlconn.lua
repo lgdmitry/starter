@@ -7,9 +7,10 @@
 --   сервер — environment верхней папки пути (Crocus -> crocus), иначе
 --            defaultServerEnvironment; адрес из .mcp.environments.json, а
 --            логин/пароль — из подключения DB_UI_* с таким же хостом;
---   базы   — из «сторожа» в конце файла (usBases ... OptionsDB & 0x…) через
---            icsMaster.dbo.usBases, иначе из маски верхней папки. Маска часто даёт
---            несколько баз (0x3000000 -> DataGroup + ICS_UA97).
+--   базы   — из «сторожа» самого файла, если он там есть (usBases ... OptionsDB & 0x…
+--            рядом с DROP — так объект сам говорит, в каких базах он должен жить;
+--            маска часто даёт несколько баз: 0x3000000 -> datagroup + ics_ua97),
+--            иначе по пути внутри репозитория — см. PATH_RULES ниже.
 -- Реестр usBases всегда читается с сервера окружения default: он там один на всех,
 -- даже когда сам файл уезжает на другой сервер.
 --
@@ -169,14 +170,22 @@ function M.server_databases(conn)
   return db_cache[conn.url]
 end
 
----Первая папка пути внутри репозитория, имя репозитория и его корень.
-function M.repo_folder(file)
+---Путь файла внутри репозитория (в нижнем регистре, через /) и корень репозитория.
+local function repo_path(file)
   local root = file ~= "" and vim.fs.root(file, ".git") or nil
   if not root then
-    return nil, nil, nil
+    return nil, nil
   end
   root = vim.fs.normalize(root)
-  local rel = vim.fs.normalize(file):sub(#root + 2)
+  return vim.fs.normalize(file):sub(#root + 2):lower(), root
+end
+
+---Первая папка пути внутри репозитория, имя репозитория и его корень.
+function M.repo_folder(file)
+  local rel, root = repo_path(file)
+  if not rel then
+    return nil, nil, nil
+  end
   return rel:match("^([^/]+)/"), vim.fs.basename(root), root
 end
 
@@ -196,7 +205,8 @@ local function conventions(root)
   return root and read_json(root .. "/.claude/repo-conventions.json") or nil
 end
 
----Правила верхней папки пути из repo-conventions.json (mask/environment).
+---Правила верхней папки пути из repo-conventions.json. Из них нужен только
+---environment (Crocus -> crocus): базы выбираются по сторожу и PATH_RULES.
 local function folder_rules(conv, folder)
   local masks = conv.usBases and conv.usBases.topFolderMasks
   if not (masks and folder) then
@@ -235,10 +245,35 @@ local function connection_for_server(list, server)
   end
 end
 
----Маска OptionsDB из «сторожа» в конце файла — это и есть ответ самого объекта на
----вопрос, в каких базах он должен существовать.
+-- Что считается «сторожем»: только самоудаление объекта —
+--   if not exists (select 1 from icsMaster.dbo.usBases
+--                   where dbName = DB_NAME() and OptionsDB & 0x1000000 <> 0)
+--   begin DROP PROC dbo.SomeProc end
+-- Такую маску объект сам называет своим ответом на вопрос «в каких базах я живу».
+-- В _FK/_TAB/_TRG та же конструкция значит совсем другое — условное содержимое
+-- («в этих базах ещё и создать индекс/констрейнт», а с not exists — «во всех, кроме
+-- этих»), и маской считать её нельзя: для таких файлов работают правила по пути.
+local DROP_KINDS = { "proc", "procedure", "view", "function", "func", "trigger", "table" }
+
+local function drops_object(chunk)
+  for _, kind in ipairs(DROP_KINDS) do
+    if chunk:find("drop%s+" .. kind .. "%f[%A]") then
+      return true
+    end
+  end
+  return false
+end
+
+---Маска OptionsDB из сторожа файла. Масок бывает несколько (в файле несколько
+---объектов) — берём первую, как это делает скилл deploy-commit.
 local function guard_mask(file)
-  return M.read_file(file):lower():match("usbases%s+where%s+dbname%s*=%s*db_name%(%)%s+and%s+optionsdb%s*&%s*(0x%x+)")
+  local text = M.read_file(file):lower()
+  for pos, mask in text:gmatch("()usbases%s+where%s+dbname%s*=%s*db_name%(%)%s+and%s+optionsdb%s*&%s*(0x%x+)") do
+    local before = text:sub(math.max(1, pos - 80), pos - 1)
+    if before:match("if%s+not%s+exists%s*%(%s*select[^()]*$") and drops_object(text:sub(pos, pos + 400)) then
+      return mask
+    end
+  end
 end
 
 local mask_cache = {}
@@ -252,6 +287,48 @@ local function mask_databases(mask, registry)
       M.query(registry, "icsMaster", "select dbName from dbo.usBases where OptionsDB & " .. mask .. " <> 0")
   end
   return mask_cache[key]
+end
+
+-- Куда выкладывать по пути внутри репозитория — первое подходящее правило.
+-- Порядок важен: ics_ua97/bk/ и ics_ua97/Support/ должны стоять раньше ics_ua97/.
+-- В databases перечислены варианты одной и той же базы для разных репозиториев:
+-- берётся тот, который есть на целевом сервере (bk — это datagroup в dgsql и
+-- icsZao в esql; серверы у них разные, так что двусмысленности нет).
+local PATH_RULES = {
+  { prefix = "crocus/", databases = { "Crocus" } },
+  { prefix = "bk/", databases = { "datagroup", "icsZao" } },
+  { prefix = "ics_ua97/bk/", databases = { "datagroup", "icsZao" } },
+  { prefix = "ics_ua97/support/", databases = { "DEV_NEW" } },
+  { prefix = "ics_ua97/", databases = { "ics_ua97" } },
+  { prefix = "icsmaster/", databases = { "icsMaster" } },
+}
+
+---База по правилам PATH_RULES.
+---@return string? database, string? how
+local function database_by_rules(file, conn)
+  local rel = repo_path(file)
+  if not rel then
+    return nil
+  end
+  for _, rule in ipairs(PATH_RULES) do
+    if rel:sub(1, #rule.prefix) == rule.prefix then
+      for _, name in ipairs(rule.databases) do
+        local exact = M.server_databases(conn)[name:lower()]
+        if exact then
+          return exact, "по пути " .. rule.prefix .. "**"
+        end
+      end
+      M.notify(
+        ("для %s** нужна база %s, а на %s её нет"):format(
+          rule.prefix,
+          table.concat(rule.databases, " или "),
+          conn.name
+        ),
+        vim.log.levels.WARN
+      )
+      return nil
+    end
+  end
 end
 
 ---Запасное правило: первая папка пути, если такая база есть на сервере, иначе база из URL.
@@ -326,40 +403,38 @@ function M.resolve_connection(file, list)
   return connection_by_name(file, list)
 end
 
----Базы для файла: маска-сторож самого файла, иначе маска верхней папки, иначе
----запасное правило по пути/URL.
+---Базы для файла: сторож самого файла (он же даёт мультидеплой), иначе правило по
+---пути, иначе запасное правило по папке/URL.
 ---@return string[] databases, string how откуда они взялись — для сообщения
 function M.resolve_databases(file, conn, list, override_db)
   if override_db and override_db ~= "" then
     return { override_db }, "база указана явно"
   end
-  local first, _, root = M.repo_folder(file)
-  local conv = conventions(root)
-  if conv then
-    local rules = folder_rules(conv, first)
-    local mask = guard_mask(file) or (rules and rules.mask)
-    if mask then
-      local registry = connection_for_server(list, env_server(root, conv, conv.defaultServerEnvironment)) or conn
-      -- маска резолвится по общему реестру, а работаем с конкретным сервером: оставляем
-      -- только те базы, которые на нём есть. Так отсекается чужой сторож, скопированный в
-      -- Crocus/** из ics_ua97 (0x3000000 -> DataGroup + ICS_UA97, которых на Crocus нет).
-      local dbs = {}
-      for _, db in ipairs(mask_databases(mask, registry)) do
-        local exact = M.server_databases(conn)[db:lower()]
-        if exact then
-          dbs[#dbs + 1] = exact
-        end
+  local mask = guard_mask(file)
+  if mask then
+    local _, root = repo_path(file)
+    local conv = conventions(root)
+    local registry = conv and connection_for_server(list, env_server(root, conv, conv.defaultServerEnvironment)) or conn
+    -- маска резолвится по общему реестру, а работаем с конкретным сервером: оставляем
+    -- только те базы, которые на нём есть. Так отсекается чужой сторож, скопированный в
+    -- Crocus/** из ics_ua97 (0x3000000 -> datagroup + ics_ua97, которых на Crocus нет).
+    local dbs = {}
+    for _, db in ipairs(mask_databases(mask, registry)) do
+      local exact = M.server_databases(conn)[db:lower()]
+      if exact then
+        dbs[#dbs + 1] = exact
       end
-      if #dbs > 0 then
-        return dbs, "usBases " .. mask
-      end
-      M.notify(
-        "маска " .. mask .. " не дала баз на " .. conn.name .. " — беру базу по пути",
-        vim.log.levels.WARN
-      )
     end
+    if #dbs > 0 then
+      return dbs, "usBases " .. mask
+    end
+    -- маска ничего не дала на этом сервере (в Crocus/** лежат сторожа, скопированные
+    -- из ics_ua97) — молча уходим на правило по пути, там оно и должно решать
   end
-  local db, how = database_by_path(file, conn)
+  local db, how = database_by_rules(file, conn)
+  if not db then
+    db, how = database_by_path(file, conn)
+  end
   return db ~= "" and { db } or {}, how
 end
 
