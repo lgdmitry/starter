@@ -12,8 +12,11 @@
 -- переменные, что используют MCP-серверы mssqlclient-* (~/.claude/mcp-servers/*.cmd).
 -- Пароль dev-логина отдельно не указан: sqlcmd сам берёт его из $SQLCMDPASSWORD.
 
--- :SqlDeploy — выложить текущий .sql файл в базу (sqlcmd, кодировка по байтам файла)
+-- Свои команды поверх dadbod (общая часть — config.sqlconn):
+--   :SqlDeploy (<leader>dd в sql-буферах) — выложить текущий .sql файл в базу
+--   :SqlDef (K), :SqlRows (<leader>dr), :SqlEnum (<leader>de) — посмотреть объект в базе
 require("config.sqldeploy").setup()
+require("config.sqlobject").setup()
 
 return {
   {
