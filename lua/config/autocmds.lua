@@ -32,13 +32,13 @@ vim.api.nvim_create_autocmd("VimEnter", {
   end,
 })
 
--- Репозитории-зеркала T-SQL (c:/repo/dgsql, c:/repo/esql): .sql файлы там в cp1251 + CRLF.
--- Раньше это задавал .editorconfig внутри dgsql, но charset=cp1251 нет в спецификации
--- editorconfig — Neovim ругался на каждый открываемый файл. Из тех настроек здесь остались
--- только те, которых нет в дефолтах: CRLF для новых файлов даёт виндовый fileformats=dos,unix,
--- финальный перевод строки — fixeol, а кодировку новых файлов и обрезку хвостовых пробелов
--- задаём сами. Только *.sql: разметка и json в .claude/ — utf-8, и хвостовые пробелы в
--- markdown значимы (перенос строки).
+-- Репозитории-зеркала T-SQL (c:/repo/dgsql, c:/repo/esql): .sql файлы там в utf-8 с BOM
+-- и CRLF (до перекодировки 2026-08 были cp1251; в старых коммитах она и осталась).
+-- Раньше это задавал .editorconfig внутри dgsql, но Neovim ругался на charset, которого нет
+-- в спецификации editorconfig. Из тех настроек здесь остались только те, которых нет в
+-- дефолтах: CRLF для новых файлов даёт виндовый fileformats=dos,unix, финальный перевод
+-- строки — fixeol, а BOM и обрезку хвостовых пробелов задаём сами. Только *.sql: разметка
+-- и json в .claude/ — utf-8 без BOM, и хвостовые пробелы в markdown значимы (перенос строки).
 local sql_mirrors = { "/repo/dgsql/", "/repo/esql/" }
 
 local function in_sql_mirror(buf)
@@ -56,10 +56,11 @@ local sql_mirror = vim.api.nvim_create_augroup("sql_mirror_repos", { clear = tru
 vim.api.nvim_create_autocmd("BufNewFile", {
   group = sql_mirror,
   pattern = "*.sql",
-  desc = "Новые .sql в зеркалах T-SQL создавать в cp1251 + CRLF",
+  desc = "Новые .sql в зеркалах T-SQL создавать в utf-8 с BOM + CRLF",
   callback = function(ev)
     if in_sql_mirror(ev.buf) then
-      vim.bo[ev.buf].fileencoding = "cp1251"
+      vim.bo[ev.buf].fileencoding = "utf-8"
+      vim.bo[ev.buf].bomb = true
       vim.bo[ev.buf].fileformat = "dos"
     end
   end,
