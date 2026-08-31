@@ -46,15 +46,32 @@ local function input_codepage(path)
   return 65001
 end
 
+---Окно с прошлым выводом, если оно ещё открыто: сплит должен быть один на все
+---выкладки, а не копиться по одному на каждую.
+local function output_window()
+  for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+    if vim.b[vim.api.nvim_win_get_buf(win)].sqldeploy_output then
+      return win
+    end
+  end
+end
+
 ---Вывод sqlcmd в нижнем сплите. Курсор остаётся в файле, если деплой прошёл,
 ---и переходит в вывод, если sqlcmd вернул ошибку — её сразу надо читать.
 local function show_output(title, lines, ok)
   local from = vim.api.nvim_get_current_win()
-  vim.cmd("botright new")
-  local buf = vim.api.nvim_get_current_buf()
+  local win = output_window()
+  if win then
+    vim.api.nvim_set_current_win(win)
+  else
+    vim.cmd("botright new")
+  end
+  local buf = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_win_set_buf(0, buf) -- прошлый буфер с bufhidden=wipe тут же удаляется
   vim.bo[buf].buftype = "nofile"
   vim.bo[buf].bufhidden = "wipe"
   vim.bo[buf].swapfile = false
+  vim.b[buf].sqldeploy_output = true
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
   vim.bo[buf].modifiable = false
   pcall(vim.api.nvim_buf_set_name, buf, "sqldeploy://" .. title)
