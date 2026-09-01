@@ -25,4 +25,34 @@ return {
     -- dadbod-ui читает .env только если vim-dotenv уже загружен
     dependencies = { "tpope/vim-dotenv" },
   },
+  -- LazyVim вешает K на vim.lsp.buf.hover() в любом буфере, к которому присоединился
+  -- хоть какой-нибудь LSP-клиент, и без проверки, умеет ли тот hover. В sql-буферах
+  -- такой клиент есть — copilot, а hover он не поддерживает, поэтому K отвечал
+  -- "method textDocument/hover is not supported...". Перебить это своим маппингом
+  -- нельзя: LazyVim ставит K через Snacks.keymap с debounce 100мс после LspAttach,
+  -- то есть всегда последним. Поэтому переопределяем саму запись:
+  --   has = "hover" — ставить K только если клиент реально умеет hover;
+  --   enabled       — в sql-буферах K всегда наш, :SqlDef (см. config.sqlobject).
+  {
+    "neovim/nvim-lspconfig",
+    opts = {
+      servers = {
+        ["*"] = {
+          keys = {
+            {
+              "K",
+              function()
+                return vim.lsp.buf.hover()
+              end,
+              desc = "Hover",
+              has = "hover",
+              enabled = function(buf)
+                return vim.bo[buf].filetype ~= "sql"
+              end,
+            },
+          },
+        },
+      },
+    },
+  },
 }

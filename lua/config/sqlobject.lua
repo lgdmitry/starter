@@ -300,6 +300,8 @@ function M.attach(buf)
 end
 
 function M.setup()
+  -- K в sql-буферах не перебивается hover-маппингом LazyVim: тот отключён для
+  -- filetype sql в спеке nvim-lspconfig (см. lua/plugins/dadbod.lua).
   vim.api.nvim_create_autocmd("FileType", {
     group = vim.api.nvim_create_augroup("sqlobject_keys", { clear = true }),
     pattern = "sql",
