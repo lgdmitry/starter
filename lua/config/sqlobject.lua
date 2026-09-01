@@ -336,13 +336,13 @@ select * from usEnumTypeValues t
 end
 
 ---Клавиши на буфер: sql-файлы вешает автокоманда, окно с ответом — show().
+---Только K и q: остальное глобальное, см. M.setup(). K глобальным быть не может —
+---везде, кроме sql, это hover от LSP.
 function M.attach(buf)
   local function map(mode, lhs, rhs, desc)
     vim.keymap.set(mode, lhs, rhs, { buffer = buf, desc = desc })
   end
   map({ "n", "x" }, "K", "<cmd>SqlDef<cr>", "Код объекта в базе")
-  map({ "n", "x" }, "<leader>dr", "<cmd>SqlRows<cr>", "Первые строки таблицы")
-  map({ "n", "x" }, "<leader>de", "<cmd>SqlEnum<cr>", "Значения enum по tvID")
   -- q закрывает только окно ответа. Проверять один buftype нельзя: буфер запроса
   -- (:SqlQuery) тоже nofile, но ему нужно своё закрытие — с возвратом в файл,
   -- а не в запрос, — и он вешает q сам (см. config.sqlquery).
@@ -368,6 +368,12 @@ function M.setup()
       M.attach(ev.buf)
     end,
   })
+
+  -- Глобально, чтобы группа <leader>d была видна в which-key из любого буфера, а не
+  -- только после открытия .sql. Имя объекта берётся из-под курсора, так что осмысленно
+  -- это и в чужом файле — например, на имени процедуры в логе или в коде на другом языке.
+  vim.keymap.set({ "n", "x" }, "<leader>dr", "<cmd>SqlRows<cr>", { desc = "Первые строки таблицы" })
+  vim.keymap.set({ "n", "x" }, "<leader>de", "<cmd>SqlEnum<cr>", { desc = "Значения enum по tvID" })
 
   local function command(name, fn, desc, count)
     vim.api.nvim_create_user_command(name, fn, { nargs = "?", bang = true, count = count, desc = desc })

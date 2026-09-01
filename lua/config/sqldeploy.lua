@@ -192,22 +192,15 @@ function M.deploy(opts)
 end
 
 function M.setup()
-  -- Клавиши буферные: <leader>d у LazyVim — группа debug, в sql-файлах она свободна
-  vim.api.nvim_create_autocmd("FileType", {
-    group = vim.api.nvim_create_augroup("sqldeploy_keys", { clear = true }),
-    pattern = "sql",
-    desc = "Клавиши :SqlDeploy в sql-буферах",
-    callback = function(ev)
-      vim.keymap.set("n", "<leader>dd", "<cmd>SqlDeploy<cr>", {
-        buffer = ev.buf,
-        desc = "Выложить .sql через sqlcmd",
-      })
-      vim.keymap.set("n", "<leader>dD", "<cmd>SqlDeploy!<cr>", {
-        buffer = ev.buf,
-        desc = "Выложить .sql, выбрав подключение",
-      })
-    end,
-  })
+  -- Клавиши глобальные, а не буферные: группа <leader>d у LazyVim отдана debug, но
+  -- extra с dap не подключён, и держать SQL-клавиши только в sql-буферах значило, что
+  -- в which-key их не видно, пока не откроешь .sql. Промах по буферу не страшен —
+  -- :SqlDeploy сам скажет, что файла в буфере нет.
+  local function map(lhs, rhs, desc)
+    vim.keymap.set("n", lhs, rhs, { desc = desc })
+  end
+  map("<leader>dd", "<cmd>SqlDeploy<cr>", "Выложить .sql через sqlcmd")
+  map("<leader>dD", "<cmd>SqlDeploy!<cr>", "Выложить .sql, выбрав подключение")
 
   vim.api.nvim_create_user_command("SqlDeploy", M.deploy, {
     nargs = "*",

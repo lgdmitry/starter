@@ -11,8 +11,9 @@
 -- Здесь и вход (-f i:65001), и выход (sqlconn.output_to_utf8) под нашим контролем,
 -- а подключение с базой берутся те же, что у :SqlDeploy для этого файла.
 --
--- В sql-буферах:
+-- Клавиши глобальные (группа <leader>d, см. plugins/which-key.lua):
 --   <leader>dq   — открыть буфер запроса для подключения/базы текущего файла
+--   <leader>dQ   — то же, но подключение спрашивается
 --   <leader>dx   — выполнить выделенное (в визуальном режиме)
 -- В самом буфере запроса <leader>dx работает и в обычном режиме — на весь буфер,
 -- а q закрывает окно, как и в окне с ответом (ценой записи макросов: в черновике
@@ -42,6 +43,18 @@ local function with_database(url, database)
   return authority .. "/" .. database .. params
 end
 
+---Есть ли ради чего делить окно: хоть один залистованный буфер с файлом. На пустом
+---старте (дашборд, [No Name]) вертикальный сплит только режет экран пополам ради
+---пустоты — там черновик занимает текущее окно.
+local function has_open_files()
+  for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+    if vim.bo[buf].buflisted and vim.api.nvim_buf_get_name(buf) ~= "" then
+      return true
+    end
+  end
+  return false
+end
+
 ---Буфер запроса для этой пары подключение/база: один на пару, а не по новому на
 ---каждый вызов — иначе за день их набирается десяток.
 local function query_buffer(conn, database, file)
@@ -64,6 +77,26 @@ local function query_buffer(conn, database, file)
   vim.b[buf].sqlquery = { file = file, conn = conn.name, db = database }
   pcall(vim.api.nvim_buf_set_name, buf, name)
   vim.bo[buf].filetype = "sql"
+  -- Эти две — только здесь: «выполнить весь буфер» в файле процедуры означало бы
+  -- :SqlDeploy, а q в обычном файле занят под что угодно другое.
+  vim.keymap.set("n", "<leader>dx", "<cmd>SqlRun<cr>", { buffer = buf, desc = "Выполнить запрос" })
+  -- окно закрывается, буфер остаётся жить (bufhidden=hide): текст запроса переживёт
+  -- закрытие и вернётся тем же <leader>dq
+  vim.keymap.set("n", "q", function()
+    -- окно может быть единственным (открылись без сплита) — :close там E444,
+    -- поэтому просто уходим на предыдущий буфер, а если его нет — в пустой
+    if #vim.api.nvim_tabpage_list_wins(0) == 1 then
+      if not pcall(vim.cmd, "buffer #") then
+        vim.cmd("enew")
+      end
+      return
+    end
+    local from = vim.b[buf].sqlquery_from
+    vim.cmd("close")
+    if from and vim.api.nvim_win_is_valid(from) then
+      vim.api.nvim_set_current_win(from)
+    end
+  end, { buffer = buf, desc = "Закрыть буфер запроса" })
   return buf
 end
 
@@ -89,10 +122,13 @@ function M.open(opts)
     local shown = vim.fn.bufwinid(buf)
     if shown ~= -1 then
       vim.api.nvim_set_current_win(shown) -- уже открыт: второе окно на тот же буфер не нужно
-    else
+    elseif has_open_files() then
       vim.cmd("vsplit")
       vim.api.nvim_win_set_buf(0, buf)
       vim.b[buf].sqlquery_from = from -- куда вернуть курсор по q
+    else
+      vim.api.nvim_win_set_buf(0, buf) -- делить нечего, занимаем текущее окно
+      vim.b[buf].sqlquery_from = nil -- возвращаться по q некуда, окно то же самое
     end
     if vim.api.nvim_buf_line_count(buf) == 1 and vim.api.nvim_buf_get_lines(buf, 0, 1, false)[1] == "" then
       vim.cmd("startinsert")
@@ -143,33 +179,14 @@ function M.run(opts)
 end
 
 function M.setup()
-  vim.api.nvim_create_autocmd("FileType", {
-    group = vim.api.nvim_create_augroup("sqlquery_keys", { clear = true }),
-    pattern = "sql",
-    desc = "Клавиши :SqlQuery/:SqlRun в sql-буферах",
-    callback = function(ev)
-      local function map(mode, lhs, rhs, desc)
-        vim.keymap.set(mode, lhs, rhs, { buffer = ev.buf, desc = desc })
-      end
-      map("n", "<leader>dq", "<cmd>SqlQuery<cr>", "Буфер запроса к базе файла")
-      map("n", "<leader>dQ", "<cmd>SqlQuery!<cr>", "Буфер запроса, выбрав подключение")
-      -- в файле процедуры на весь буфер вешать нечего: это и есть :SqlDeploy,
-      -- поэтому в обычном режиме <leader>dx живёт только в самом буфере запроса
-      map("x", "<leader>dx", ":<C-u>'<,'>SqlRun<cr>", "Выполнить выделенный запрос")
-      if vim.b[ev.buf].sqlquery then
-        map("n", "<leader>dx", "<cmd>SqlRun<cr>", "Выполнить запрос")
-        -- окно закрывается, буфер остаётся жить (bufhidden=hide): текст запроса
-        -- переживёт закрытие и вернётся тем же <leader>dq
-        map("n", "q", function()
-          local from = vim.b[ev.buf].sqlquery_from
-          vim.cmd("close")
-          if from and vim.api.nvim_win_is_valid(from) then
-            vim.api.nvim_set_current_win(from)
-          end
-        end, "Закрыть буфер запроса")
-      end
-    end,
-  })
+  -- Глобально: <leader>dq должен открывать черновик запроса откуда угодно, а не
+  -- только из уже открытого .sql — иначе до базы приходится идти через :DBUI.
+  local function map(mode, lhs, rhs, desc)
+    vim.keymap.set(mode, lhs, rhs, { desc = desc })
+  end
+  map("n", "<leader>dq", "<cmd>SqlQuery<cr>", "Буфер запроса к базе файла")
+  map("n", "<leader>dQ", "<cmd>SqlQuery!<cr>", "Буфер запроса, выбрав подключение")
+  map("x", "<leader>dx", ":<C-u>'<,'>SqlRun<cr>", "Выполнить выделенный запрос")
 
   vim.api.nvim_create_user_command("SqlQuery", M.open, {
     bang = true,

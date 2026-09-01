@@ -13,10 +13,14 @@
 -- Дерево теперь полное, а список не смешивается: своё правило сортировки уводит всё
 -- с не-ASCII байтами в конец, поэтому сверху идут привычные латинские варианты.
 -- sort принимает не только имена встроенных полей, но и функцию (which-key/view.lua).
+-- Группа <leader>d: у LazyVim это debug, но extra с dap не подключён, так что группа
+-- пустая — занимаем её под свой SQL-слой (:SqlDeploy, :SqlQuery и прочее). Дописываем
+-- в конец opts.spec, а не задаём spec целиком: списки при слиянии заменяются, и мы бы
+-- снесли все остальные имена групп LazyVim.
 return {
   "folke/which-key.nvim",
-  opts = {
-    sort = {
+  opts = function(_, opts)
+    opts.sort = {
       function(item)
         return item.key:find("[\128-\255]") and 1 or 0
       end,
@@ -25,6 +29,8 @@ return {
       "group",
       "alphanum",
       "mod",
-    },
-  },
+    }
+    opts.spec = opts.spec or {}
+    table.insert(opts.spec, { "<leader>d", group = "sql" })
+  end,
 }
