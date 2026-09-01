@@ -33,6 +33,10 @@ require("lazy").setup({
   install = { colorscheme = { "tokyonight", "habamax" } },
   -- ни один плагин не требует luarocks, а checkhealth иначе ругается на hererocks
   rocks = { enabled = false },
+  -- copilot.lua тащит бинарники Copilot LSP под все платформы: ~530 МБ рабочего
+  -- дерева и ~200 МБ истории. В дефолтные 120 секунд клон не укладывается, git
+  -- убивается на середине и оставляет битый каталог с одним .git/objects.
+  git = { timeout = 600 },
   checker = {
     enabled = true, -- check for plugin updates periodically
     notify = false, -- notify on update
