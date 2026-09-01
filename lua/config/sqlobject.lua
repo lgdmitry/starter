@@ -1,11 +1,13 @@
 -- :SqlDef / :SqlRows / :SqlEnum — посмотреть объект прямо в базе, не открывая файл:
--- код процедуры/функции/вьюхи, состав таблицы, первые строки, значения enum.
+-- код процедуры/функции/вьюхи, состав таблицы, первые строки, значения enum,
+-- текст сообщения по номеру.
 -- Замена тому, что раньше делал SQLTools в Sublime (desc table / desc function /
 -- show records / show enum), только сервер и база не спрашиваются, а берутся по тем же
 -- правилам, что у :SqlDeploy (см. config.sqlconn).
 --
 -- В sql-буферах и в окне с ответом:
---   K            — код объекта под курсором или выделенного
+--   K            — код объекта под курсором или выделенного, а на числе — текст
+--                  сообщения с этим номером (K прямо на номере в RAISERROR(60003, ...))
 --   <leader>dr   — первые строки таблицы/вьюхи
 --   <leader>de   — значения enum по tvID под курсором
 --   q            — закрыть окно с ответом
@@ -88,6 +90,21 @@ else select concat(
    where fk.parent_object_id = @o), ''));
 ]==]
 
+-- Текст сообщения по номеру из RAISERROR/THROW — только сам текст, без служебных
+-- полей: его читают как сообщение, а не как объект. Сообщения живут на сервере, а не
+-- в базе, поэтому базы перебирать не нужно — хватает первой. Если номер заведён на
+-- нескольких языках, показываем все через пустую строку.
+local MESSAGE = [==[
+set nocount on;
+declare @id int = %s;
+-- разделителем string_agg может быть только литерал или переменная, но не выражение
+declare @sep nvarchar(4) = char(13) + char(10) + char(13) + char(10);
+if not exists (select 1 from sys.messages where message_id = @id) select '#NOTFOUND#';
+else select string_agg(cast(text as nvarchar(max)) collate database_default, @sep)
+    within group (order by language_id)
+  from sys.messages where message_id = @id;
+]==]
+
 ---Слово под курсором вместе с точками и скобками: dbo.usBases, [icsMaster].[dbo].[x].
 local function object_under_cursor()
   local line = vim.api.nvim_get_current_line()
@@ -151,22 +168,28 @@ local function split_name(name)
   return database, table.concat(quoted, ".")
 end
 
----Окно с ответом. Одно на все объекты: следующий :SqlDef переиспользует его,
----а K внутри него ищет уже по тому же подключению и базе.
+---Окно с ответом. Одно на каждый вид (ctx.kind): следующий :SqlDef переиспользует его,
+---а K внутри него ищет уже по тому же подключению и базе. Код объекта и строки таблицы
+---читают как файл — им вертикальный сплит; текст сообщения короткий, ему нижний, как
+---выводу :SqlDeploy. Поэтому окно с кодом не занимается сообщением и наоборот.
 local function show(title, text, ctx, ft)
+  local kind = ctx.kind or "object"
   local lines = vim.split(text, "\n")
   while #lines > 0 and lines[#lines]:match("^%s*$") do
     table.remove(lines)
   end
   local win
   for _, w in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
-    if vim.b[vim.api.nvim_win_get_buf(w)].sqlobject then
+    local prev = vim.b[vim.api.nvim_win_get_buf(w)].sqlobject
+    if prev and (prev.kind or "object") == kind then
       win = w
       break
     end
   end
   if win then
     vim.api.nvim_set_current_win(win)
+  elseif kind == "message" then
+    vim.cmd("botright new")
   else
     vim.cmd("vsplit")
   end
@@ -181,6 +204,9 @@ local function show(title, text, ctx, ft)
   vim.bo[buf].filetype = ft or "sql" -- заодно вешает клавиши из M.setup()
   M.attach(buf)
   pcall(vim.api.nvim_buf_set_name, buf, "sqlobject://" .. title)
+  if kind == "message" then
+    vim.api.nvim_win_set_height(0, math.min(20, math.max(5, #lines + 1)))
+  end
   vim.api.nvim_win_set_cursor(0, { 1, 0 })
 end
 
@@ -241,13 +267,21 @@ local function lookup(conn, dbs, i, title, args, ctx, ft)
   end)
 end
 
----:SqlDef — код объекта (процедура/функция/вьюха/триггер) или состав таблицы.
+---:SqlDef — код объекта (процедура/функция/вьюха/триггер), состав таблицы, а на числе —
+---текст сообщения с этим номером: K прямо на номере внутри RAISERROR(60003, ...).
 function M.define(opts)
   local name = wanted_object(opts.fargs)
   if not name then
     return notify("не понял, какой объект смотреть", vim.log.levels.ERROR)
   end
   target(opts.bang, function(conn, dbs, file)
+    -- число объектом быть не может, зато это номер сообщения из RAISERROR/THROW
+    local id = name:match("^%d+$")
+    if id then
+      local args = { "-y0", "-f", "i:65001", "-Q", MESSAGE:format(id) }
+      local ctx = { file = file, kind = "message" }
+      return lookup(conn, { dbs[1] }, 1, "message " .. id, args, ctx, "")
+    end
     local db, object = split_name(name)
     local query = DESCRIBE:format((object:gsub("'", "''")))
     lookup(conn, db and { db } or dbs, 1, object, { "-y0", "-f", "i:65001", "-Q", query }, { file = file }, "sql")
@@ -317,7 +351,7 @@ function M.setup()
   command(
     "SqlDef",
     M.define,
-    "Показать код объекта из базы (! — выбрать подключение)"
+    "Показать код объекта из базы, на числе — текст сообщения (! — выбрать подключение)"
   )
   command(
     "SqlRows",
