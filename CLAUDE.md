@@ -32,6 +32,31 @@ Syntax-check a file without starting the UI:
   -c "lua print(loadfile('lua/config/sqlobject.lua') ~= nil)" -c "qa"
 ```
 
+## Verifying changes
+
+Headless nvim is good for inspecting state (dump keymaps, walk a plugin's
+internal tree, check an option) and useless for anything driven by keypresses:
+which-key's `getcharstr()` loop does not run under `--headless`, so a fed
+`<leader>` sequence never resolves — even the latin control case fails. Test
+key handling interactively instead, or by asking for a one-line `:lua` check.
+
+Two things that will waste time otherwise:
+
+- Pass **Windows paths** to `nvim.exe` (`C:/Users/...`). An MSYS-style
+  `/c/Users/...` path is not found, `luafile` fails silently-ish and headless
+  nvim then just sits there until it is killed.
+- Starting nvim (headless included) can install or update plugins and rewrite
+  `lazy-lock.json`. Check `git status` afterwards and don't fold that into an
+  unrelated commit.
+
+SQL can be verified for real before shipping it: MCP servers `mssqlclient-*`
+(esql/dgsql/crocus dev) execute queries directly. Use them for anything going
+into `lua/config/sql*.lua` — e.g. `string_agg`'s separator must be a literal
+or variable, which only shows up when the server rejects it.
+
+`stylua` is not in PATH; it lives in
+`~/AppData/Local/nvim-data/mason/bin/stylua.cmd`.
+
 ## Custom MS SQL layer
 
 Not a plugin — own code on top of vim-dadbod, wired up from
