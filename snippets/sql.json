@@ -1,0 +1,198 @@
+{
+  "use": {
+    "prefix": "use",
+    "body": ["use ${1:DBName}", "go", "", "$0"],
+    "description": "use <database>"
+  },
+  "select": {
+    "prefix": "sel",
+    "body": ["select ${2:*}", "from ${1:Document}", "$0"],
+    "description": "select ... from"
+  },
+  "select document": {
+    "prefix": "seldoc",
+    "body": [
+      "select",
+      "   @dcNo     = dcNo",
+      "  ,@dcDateV  = CONVERT(varchar(10),dcDate,104)",
+      "from Document",
+      "where dcID = @dcID",
+      "$0"
+    ],
+    "description": "select the document header into variables"
+  },
+  "where": {
+    "prefix": "wh",
+    "body": ["where ${1:t1}.${2:colname} = ${3:Value}"],
+    "description": "where"
+  },
+  "inner join": {
+    "prefix": "jo",
+    "body": ["inner join ${1:Table2} ${2:s} on ${2:s}.${3:skey} = ${4:t}.${3:skey}"],
+    "description": "inner join on the same key name"
+  },
+  "left join": {
+    "prefix": "ljo",
+    "body": ["left outer join ${1:Table2} ${2:s} on ${2:s}.${3:skey} = ${4:t}.${3:skey}"],
+    "description": "left outer join on the same key name"
+  },
+  "left join with explicit key": {
+    "prefix": "ljo2",
+    "body": ["left outer join ${1:Table2} ${2:s} on ${2:s}.${3:skey} = ${5:t1}.${4:t1key}"],
+    "description": "left outer join, both sides named explicitly"
+  },
+  "exists": {
+    "prefix": "ex",
+    "body": [
+      "exists (select 1",
+      "        from ${1:Document}",
+      "        where ${2:dcID = @dcID})$0"
+    ],
+    "description": "exists (select 1 ...)"
+  },
+  "add column": {
+    "prefix": "add",
+    "body": ["ALTER TABLE ${1:Table} ADD ${2:ColName} ${3:type}", "GO", "$0"],
+    "description": "alter table add column"
+  },
+  "create index": {
+    "prefix": "ind",
+    "body": [
+      "CREATE INDEX IX_${1:Table}_${2:ColName} ON ${1:Table}(${2:ColName})",
+      "  WITH  FILLFACTOR = 90  ON [PRIMARY_IND]",
+      "GO",
+      "$0"
+    ],
+    "description": "create index"
+  },
+  "drop if object exists": {
+    "prefix": "ifobj",
+    "body": ["if OBJECT_ID('${1:this}','${2:P}') is NOT NULL DROP ${3:PROCEDURE} ${1:this}$0"],
+    "description": "drop the object if it exists"
+  },
+  "scalar function": {
+    "prefix": "sfun",
+    "body": [
+      "create function ${1:FunctionName}",
+      "(",
+      "  -- Add the parameters for the function here",
+      "  @${2:p1} ${3:int}",
+      ")",
+      "returns ${4:int}",
+      "as",
+      "begin",
+      "  -- Declare the return variable here",
+      "  declare @Result ${4:int}",
+      "",
+      "  -- Add the T-SQL statements to compute the return value here",
+      "  select @Result = @${2:p1}",
+      "",
+      "  -- Return the result of the function",
+      "  return @Result",
+      "",
+      "end",
+      "go",
+      "$0"
+    ],
+    "description": "create scalar function"
+  },
+  "table function": {
+    "prefix": "tfun",
+    "body": [
+      "create function ${1:fnName}",
+      "(",
+      "  -- Add the parameters for the function here",
+      "  @${2:p1} ${3:int},",
+      "  @${4:p2} ${5:int}",
+      ")",
+      "returns",
+      "@${6:ret} table",
+      "(",
+      "  -- Add the column definitions for the TABLE variable here",
+      "  ${7:c1} ${8:int},",
+      "  ${9:c2} ${10:int}",
+      ")",
+      "as",
+      "begin",
+      "  -- Fill the table variable with the rows for your result set",
+      "",
+      "  return @${6:ret}",
+      "end",
+      "go",
+      "$0"
+    ],
+    "description": "create table-valued function"
+  },
+  "execute procedure": {
+    "prefix": "execproc",
+    "body": [
+      "exec ${2:@RetCode} = ${1:PocedureName}",
+      "  ${3:@id} = ${3:@id}",
+      "if ${2:@RetCode} != 0 or @@ERROR != 0",
+      "begin",
+      "  RAISERROR(60003,16,10,'${1:PocedureName}') WITH SETERROR;",
+      "  RETURN -1;",
+      "end;$0"
+    ],
+    "description": "call a procedure and check the return code"
+  },
+  "raiserror": {
+    "prefix": "raise",
+    "body": ["RAISERROR(${1:60003},16,10,'${2}') WITH SETERROR;", "RETURN -1;$0"],
+    "description": "raiserror + return -1"
+  },
+  "while": {
+    "prefix": "while",
+    "body": [
+      "set @n = (select COUNT(*) from ${1:tblName})",
+      "set @i = 0",
+      "while @i < @n",
+      "begin",
+      "  select",
+      "    $0",
+      "  from ${1:tblName}",
+      "  where i = @i",
+      "  --",
+      "  set @i += 1",
+      "end;"
+    ],
+    "description": "loop over a numbered table"
+  },
+  "execute as": {
+    "prefix": "execas",
+    "body": ["execute as login = 'icscorp\\\\pesotskiydmi'"],
+    "description": "execute as dmitry"
+  },
+  "find text in modules": {
+    "prefix": "fit",
+    "body": [
+      "select distinct",
+      "  object_name = OBJECT_NAME(sm.object_id)",
+      "FROM sys.sql_modules AS sm",
+      "  inner join sys.objects AS o ON sm.object_id = o.object_id",
+      "where sm.definition like '%${1:text}%'",
+      "  $0",
+      "GO"
+    ],
+    "description": "find the text in stored procedures"
+  },
+  "find text in jobs": {
+    "prefix": "fij",
+    "body": [
+      "SELECT s.step_id as 'Step ID',",
+      "j.[name] as 'SQL Agent Job Name',",
+      "s.database_name as 'DB Name',",
+      "s.command as 'Command'",
+      "FROM   msdb.dbo.sysjobsteps AS s",
+      "INNER JOIN msdb.dbo.sysjobs AS j ON  s.job_id = j.job_id",
+      "WHERE  s.command LIKE '%${1:text}%'",
+      "$0"
+    ],
+    "description": "find the text in jobs"
+  },
+  "find message": {
+    "prefix": "fim",
+    "body": ["select message_id,text", "from sys.messages", "where text like '%${1:text}%'", "GO", "$0"],
+    "description": "find the message in sys.messages"
+  }
+}
