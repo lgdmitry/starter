@@ -15,8 +15,10 @@
 -- Свои команды поверх dadbod (общая часть — config.sqlconn):
 --   :SqlDeploy (<leader>dd в sql-буферах) — выложить текущий .sql файл в базу
 --   :SqlDef (K), :SqlRows (<leader>dr), :SqlEnum (<leader>de) — посмотреть объект в базе
+--   :SqlQuery (<leader>dq), :SqlRun (<leader>dx) — разовый запрос рядом с процедурой
 require("config.sqldeploy").setup()
 require("config.sqlobject").setup()
+require("config.sqlquery").setup()
 
 return {
   {

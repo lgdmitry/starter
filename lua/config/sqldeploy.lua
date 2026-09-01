@@ -64,7 +64,8 @@ local function show_output(title, lines, ok)
   if win then
     vim.api.nvim_set_current_win(win)
   else
-    vim.cmd("botright new")
+    -- split, а не new: :new оставил бы после подмены буфера пустой [No Name] в списке
+    vim.cmd("botright split")
   end
   local buf = vim.api.nvim_create_buf(false, true)
   vim.api.nvim_win_set_buf(0, buf) -- прошлый буфер с bufhidden=wipe тут же удаляется

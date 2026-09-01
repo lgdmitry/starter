@@ -168,11 +168,16 @@ local function split_name(name)
   return database, table.concat(quoted, ".")
 end
 
+-- Виды ответа, которым нужен нижний сплит, а не вертикальный: их читают не как файл,
+-- а как вывод — текст сообщения и результат :SqlRun (рядом с ним слева остаётся сам
+-- запрос, который правят дальше). Код объекта и строки таблицы читают как файл, им
+-- вертикальный. Поэтому окно с кодом не занимается сообщением и наоборот.
+local BOTTOM = { message = true, query = true }
+
 ---Окно с ответом. Одно на каждый вид (ctx.kind): следующий :SqlDef переиспользует его,
----а K внутри него ищет уже по тому же подключению и базе. Код объекта и строки таблицы
----читают как файл — им вертикальный сплит; текст сообщения короткий, ему нижний, как
----выводу :SqlDeploy. Поэтому окно с кодом не занимается сообщением и наоборот.
-local function show(title, text, ctx, ft)
+---а K внутри него ищет уже по тому же подключению и базе.
+---@param ctx table kind — вид окна, conn/db — где смотрели, file — исходный файл
+function M.show(title, text, ctx, ft)
   local kind = ctx.kind or "object"
   local lines = vim.split(text, "\n")
   while #lines > 0 and lines[#lines]:match("^%s*$") do
@@ -186,10 +191,19 @@ local function show(title, text, ctx, ft)
       break
     end
   end
+  -- Куда вернуть курсор по q. Само окно ответа origin'ом быть не может: K внутри него
+  -- переиспользует это же окно, и тогда q возвращал бы в него же — наследуем прошлый.
+  ctx.from = vim.api.nvim_get_current_win()
+  if win == ctx.from then
+    local prev = vim.b[vim.api.nvim_win_get_buf(win)].sqlobject
+    ctx.from = (prev and prev.from) or ctx.from
+  end
   if win then
     vim.api.nvim_set_current_win(win)
-  elseif kind == "message" then
-    vim.cmd("botright new")
+  elseif BOTTOM[kind] then
+    -- split, а не new: :new заводит пустой буфер, который мы тут же подменяем своим,
+    -- и он остаётся в списке как [No Name] — по одному на каждый показ
+    vim.cmd("botright split")
   else
     vim.cmd("vsplit")
   end
@@ -204,14 +218,15 @@ local function show(title, text, ctx, ft)
   vim.bo[buf].filetype = ft or "sql" -- заодно вешает клавиши из M.setup()
   M.attach(buf)
   pcall(vim.api.nvim_buf_set_name, buf, "sqlobject://" .. title)
-  if kind == "message" then
+  if BOTTOM[kind] then
     vim.api.nvim_win_set_height(0, math.min(20, math.max(5, #lines + 1)))
   end
   vim.api.nvim_win_set_cursor(0, { 1, 0 })
 end
 
 ---Откуда смотреть: в окне с ответом — то же подключение и база, иначе по файлу.
-local function target(bang, cb)
+---Экспортируется ради config.sqlquery: буферу запроса нужно ровно то же самое.
+function M.target(bang, cb)
   local ctx = vim.b.sqlobject
   local file = (ctx and ctx.file) or vim.api.nvim_buf_get_name(0)
   local list = sql.connections(file)
@@ -257,7 +272,7 @@ local function lookup(conn, dbs, i, title, args, ctx, ft)
       if code ~= 0 then
         notify(title .. " @ " .. conn.name .. "/" .. db .. ": sqlcmd вернул " .. code, vim.log.levels.ERROR)
       end
-      show(
+      M.show(
         ("%s @ %s/%s"):format(title, conn.name, db),
         text,
         vim.tbl_extend("force", ctx, { conn = conn.name, db = db }),
@@ -274,7 +289,7 @@ function M.define(opts)
   if not name then
     return notify("не понял, какой объект смотреть", vim.log.levels.ERROR)
   end
-  target(opts.bang, function(conn, dbs, file)
+  M.target(opts.bang, function(conn, dbs, file)
     -- число объектом быть не может, зато это номер сообщения из RAISERROR/THROW
     local id = name:match("^%d+$")
     if id then
@@ -295,7 +310,7 @@ function M.rows(opts)
     return notify("не понял, из чего показывать строки", vim.log.levels.ERROR)
   end
   local limit = (opts.count and opts.count > 0) and opts.count or M.rows_limit
-  target(opts.bang, function(conn, dbs, file)
+  M.target(opts.bang, function(conn, dbs, file)
     local db, object = split_name(name)
     local query = ("set nocount on; select top %d * from %s;"):format(limit, object)
     -- -w: без него sqlcmd ломает строку на 80 символах и таблица едет в кашу
@@ -310,7 +325,7 @@ function M.enum(opts)
   if not tostring(id):match("^%-?%d+$") then
     return notify("нужен числовой tvID, а не " .. tostring(id), vim.log.levels.ERROR)
   end
-  target(opts.bang, function(conn, dbs, file)
+  M.target(opts.bang, function(conn, dbs, file)
     local query = ([[set nocount on;
 select * from usEnumTypeValues t
  where exists (select 1 from usEnumTypeValues where tyID = t.tyID and tvID = %s)
@@ -328,8 +343,17 @@ function M.attach(buf)
   map({ "n", "x" }, "K", "<cmd>SqlDef<cr>", "Код объекта в базе")
   map({ "n", "x" }, "<leader>dr", "<cmd>SqlRows<cr>", "Первые строки таблицы")
   map({ "n", "x" }, "<leader>de", "<cmd>SqlEnum<cr>", "Значения enum по tvID")
-  if vim.bo[buf].buftype == "nofile" then
-    map("n", "q", "<cmd>close<cr>", "Закрыть окно")
+  -- q закрывает только окно ответа. Проверять один buftype нельзя: буфер запроса
+  -- (:SqlQuery) тоже nofile, но ему нужно своё закрытие — с возвратом в файл,
+  -- а не в запрос, — и он вешает q сам (см. config.sqlquery).
+  if vim.bo[buf].buftype == "nofile" and not vim.bo[buf].modifiable then
+    map("n", "q", function()
+      local from = (vim.b[buf].sqlobject or {}).from
+      vim.cmd("close")
+      if from and vim.api.nvim_win_is_valid(from) then
+        vim.api.nvim_set_current_win(from)
+      end
+    end, "Закрыть окно")
   end
 end
 

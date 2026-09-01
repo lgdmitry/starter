@@ -70,6 +70,9 @@ Not a plugin — own code on top of vim-dadbod, wired up from
   `:SqlEnum` (`<leader>de`): inspect an object in the database. Replaces what
   SQLTools used to do in Sublime (`desc table` / `desc function` /
   `show records` / `show enum`).
+- `lua/config/sqlquery.lua` — `:SqlQuery` (`<leader>dq`): a scratch query
+  buffer bound to the connection and database of the current file;
+  `:SqlRun` (`<leader>dx`) runs it, or the visual selection in any sql buffer.
 
 Connections are not stored in this config but in each project's `.env`
 (`DB_UI_*` variables, read by `tpope/vim-dotenv`); credentials come from the
@@ -78,6 +81,14 @@ environment (`SQLCMDUSER` etc.).
 No Cyrillic in SQL query text passed to `sqlcmd` via `-Q`: the command line
 arrives as ANSI and the text gets mangled. Cyrillic in the returned result is
 fine.
+
+Do not route queries through dadbod's own `:DB` / `<leader>S`: its sqlserver
+adapter calls `sqlcmd` with no `-f` at all, so both the query file it writes
+and the output it reads back are ANSI — Cyrillic breaks in the *result*, not
+just in the query. `sqlcmd`'s own output codepage is not worth relying on
+either (`-f i:65001` vs `-f 65001` vs a BOM all behave differently, and it
+seems to mirror whatever encoding it detected in the input file); detect the
+bytes instead, which is what `sqlconn.output_to_utf8` does.
 
 ## Conventions
 
