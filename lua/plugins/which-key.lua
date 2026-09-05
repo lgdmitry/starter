@@ -13,6 +13,17 @@
 -- Дерево теперь полное, а список не смешивается: своё правило сортировки уводит всё
 -- с не-ASCII байтами в конец, поэтому сверху идут привычные латинские варианты.
 -- sort принимает не только имена встроенных полей, но и функцию (which-key/view.lua).
+--
+-- Исключение — <leader>w и <leader>b (lazyvim/plugins/editor.lua): это which-key
+-- group-узлы с proxy/expand, а не обычные маппинги, и automapping их не дублирует
+-- (см. plugins/langmapper.lua). Для <leader>w (кириллический дубль "<leader>ц")
+-- там заведены настоящие vim.keymap.set на нужные <c-w>-команды — which-key сам
+-- строит из них рабочую группу, proxy в обход не участвует. Для <leader>b
+-- (дубль "<leader>е") proxy и не нужен был: это просто открытие попапа с
+-- цифровым списком буферов, цифры одинаковы в любой раскладке — но открывающий
+-- keymap там всё равно с desc = "which_key_ignore" (which-key прячет такие узлы
+-- из дерева сам, tree.lua), отдельный filter тут не нужен.
+--
 -- Группа <leader>d: у LazyVim это debug, но extra с dap не подключён, так что группа
 -- пустая — занимаем её под свой SQL-слой (:SqlDeploy, :SqlQuery и прочее). Дописываем
 -- в конец opts.spec, а не задаём spec целиком: списки при слиянии заменяются, и мы бы
@@ -30,7 +41,9 @@ return {
       "alphanum",
       "mod",
     }
+
     opts.spec = opts.spec or {}
     table.insert(opts.spec, { "<leader>d", group = "sql" })
+    table.insert(opts.spec, { "<leader>ц", group = "windows" })
   end,
 }
