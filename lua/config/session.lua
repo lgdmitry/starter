@@ -4,7 +4,8 @@
 -- папки, руками — <leader>qs (сессия папки) и <leader>ql (последняя вообще).
 -- Здесь только автозагрузка: nvim без аргументов сначала ищет сессию текущей папки,
 -- а если её нет — берёт самую свежую из сохранённых. Сессий нет вовсе — остаётся
--- дашборд, он никуда не убран.
+-- дашборд, он никуда не убран. NVIM_RESTORE_LAST=1 в окружении пропускает поиск
+-- по cwd и сразу берёт самую свежую (см. force_last ниже).
 
 local M = {}
 
@@ -31,11 +32,20 @@ local function reload_current_buffer()
   end)
 end
 
+---Профиль alacritty для быстрого запуска nvim (profiles/neovim.toml) всегда
+---стартует с cwd = папка этого конфига — из-за этого сессия для cwd всегда
+---находится и матчится именно на неё, а настоящая последняя рабочая сессия
+---(другой проект) никогда не всплывает. Профиль выставляет NVIM_RESTORE_LAST=1,
+---чтобы явно попросить пропустить cwd-сессию и взять глобально последнюю.
+local function force_last()
+  return vim.env.NVIM_RESTORE_LAST == "1"
+end
+
 ---Восстанавливает сессию текущей папки, иначе самую свежую из сохранённых.
 ---@return boolean восстановили ли что-нибудь
 function M.restore()
   local persistence = require("persistence")
-  if session_for_cwd(persistence) then
+  if not force_last() and session_for_cwd(persistence) then
     persistence.load()
     reload_current_buffer()
     return true
