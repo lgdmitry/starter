@@ -45,5 +45,6 @@ return {
     opts.spec = opts.spec or {}
     table.insert(opts.spec, { "<leader>d", group = "sql" })
     table.insert(opts.spec, { "<leader>ц", group = "windows" })
+    table.insert(opts.spec, { "<leader>m", group = "multicursor" })
   end,
 }
