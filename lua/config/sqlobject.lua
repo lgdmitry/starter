@@ -3,7 +3,7 @@
 -- текст сообщения по номеру.
 -- Замена тому, что раньше делал SQLTools в Sublime (desc table / desc function /
 -- show records / show enum), только сервер и база не спрашиваются, а берутся по тем же
--- правилам, что у :SqlDeploy (см. config.sqlconn).
+-- правилам, что у :SqlDeploy (см. config.sqltarget).
 --
 -- В sql-буферах и в окне с ответом:
 --   K            — код объекта под курсором или выделенного, а на числе — текст
@@ -15,15 +15,15 @@
 -- :50SqlRows tEmploy. С ! (:SqlDef!) подключение спрашивается.
 
 local sql = require("config.sqlconn")
+local target = require("config.sqltarget")
+local sqlwin = require("config.sqlwin")
 
 local M = {}
 
 ---Сколько строк показывает :SqlRows без явного счётчика (как show_records.limit в SQLTools).
 M.rows_limit = 1000
 
-local function notify(msg, level)
-  sql.notify(msg, level, "SqlObject")
-end
+local notify = sql.notifier("SqlObject")
 
 -- Одним запросом: у процедур/функций/вьюх/триггеров — исходник как есть, у таблиц —
 -- колонки, индексы и внешние ключи. Всё склеивается в одно значение, чтобы sqlcmd
@@ -168,116 +168,42 @@ local function split_name(name)
   return database, table.concat(quoted, ".")
 end
 
--- Виды ответа, которым нужен нижний сплит, а не вертикальный: их читают не как файл,
--- а как вывод — текст сообщения и результат :SqlRun (рядом с ним слева остаётся сам
--- запрос, который правят дальше). Код объекта и строки таблицы читают как файл, им
--- вертикальный. Поэтому окно с кодом не занимается сообщением и наоборот.
-local BOTTOM = { message = true, query = true }
-
----Окно с ответом. Одно на каждый вид (ctx.kind): следующий :SqlDef переиспользует его,
----а K внутри него ищет уже по тому же подключению и базе.
----@param ctx table kind — вид окна, conn/db — где смотрели, file — исходный файл
-function M.show(title, text, ctx, ft)
-  local kind = ctx.kind or "object"
-  local lines = vim.split(text, "\n")
-  while #lines > 0 and lines[#lines]:match("^%s*$") do
-    table.remove(lines)
-  end
-  local win
-  for _, w in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
-    local prev = vim.b[vim.api.nvim_win_get_buf(w)].sqlobject
-    if prev and (prev.kind or "object") == kind then
-      win = w
-      break
-    end
-  end
-  -- Куда вернуть курсор по q. Само окно ответа origin'ом быть не может: K внутри него
-  -- переиспользует это же окно, и тогда q возвращал бы в него же — наследуем прошлый.
-  ctx.from = vim.api.nvim_get_current_win()
-  if win == ctx.from then
-    local prev = vim.b[vim.api.nvim_win_get_buf(win)].sqlobject
-    ctx.from = (prev and prev.from) or ctx.from
-  end
-  if win then
-    vim.api.nvim_set_current_win(win)
-  elseif BOTTOM[kind] then
-    -- split, а не new: :new заводит пустой буфер, который мы тут же подменяем своим,
-    -- и он остаётся в списке как [No Name] — по одному на каждый показ
-    vim.cmd("botright split")
-  else
-    vim.cmd("vsplit")
-  end
-  local buf = vim.api.nvim_create_buf(false, true)
-  vim.api.nvim_win_set_buf(0, buf)
-  vim.bo[buf].buftype = "nofile"
-  vim.bo[buf].bufhidden = "wipe"
-  vim.bo[buf].swapfile = false
-  vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
-  vim.bo[buf].modifiable = false
-  vim.b[buf].sqlobject = ctx
-  vim.bo[buf].filetype = ft or "sql" -- заодно вешает клавиши из M.setup()
-  M.attach(buf)
-  pcall(vim.api.nvim_buf_set_name, buf, "sqlobject://" .. title)
-  if BOTTOM[kind] then
-    vim.api.nvim_win_set_height(0, math.min(20, math.max(5, #lines + 1)))
-  end
-  vim.api.nvim_win_set_cursor(0, { 1, 0 })
-end
-
----Откуда смотреть: в окне с ответом — то же подключение и база, иначе по файлу.
----Экспортируется ради config.sqlquery: буферу запроса нужно ровно то же самое.
-function M.target(bang, cb)
-  local ctx = vim.b.sqlobject
-  local file = (ctx and ctx.file) or vim.api.nvim_buf_get_name(0)
-  local list = sql.connections(file)
-  if #list == 0 then
-    return notify("не найдено подключений DB_UI_* в .env проекта", vim.log.levels.ERROR)
-  end
-  local function go(conn)
-    if not conn then
-      return notify("отменено")
-    end
-    local dbs
-    if ctx and ctx.conn == conn.name and ctx.db then
-      dbs = { ctx.db }
-    else
-      dbs = sql.resolve_databases(file, conn, list, nil)
-    end
-    if #dbs == 0 then
-      return notify("не определена база для " .. conn.name, vim.log.levels.ERROR)
-    end
-    cb(conn, dbs, file)
-  end
-  if not bang then
-    local conn = sql.resolve_connection(file, list)
-    if conn then
-      return go(conn)
-    end
-  end
-  sql.select(list, "Смотреть в:", go)
+---Откуда смотреть: в окне с ответом и в черновике запроса — то же подключение и база,
+---иначе по файлу и правилам репозитория.
+local function pick(bang, cb)
+  target.pick({
+    ctx = vim.b.sqlctx,
+    file = vim.api.nvim_buf_get_name(0),
+    bang = bang,
+    prompt = "Смотреть в:",
+    title = "SqlObject",
+  }, cb)
 end
 
 ---Гоняет запрос по базам подряд, пока объект не найдётся: файл лежит в ics_ua97, а
 ---объект рядом с ним вполне может жить в icsMaster.
-local function lookup(conn, dbs, i, title, args, ctx, ft)
-  local db = dbs[i]
+---@param o table conn, dbs, title, args, ctx и всё, что нужно окну: kind, filetype, bottom
+local function lookup(o, i)
+  local db = o.dbs[i]
   if not db then
-    return notify(title .. ": не найден в " .. table.concat(dbs, ", "), vim.log.levels.WARN)
+    return notify(o.title .. ": не найден в " .. table.concat(o.dbs, ", "), vim.log.levels.WARN)
   end
-  sql.sqlcmd(conn, db, args, function(code, text)
+  sql.sqlcmd(o.conn, db, o.args, function(code, text)
     vim.schedule(function()
       if vim.trim(text) == "#NOTFOUND#" then
-        return lookup(conn, dbs, i + 1, title, args, ctx, ft)
+        return lookup(o, i + 1)
       end
       if code ~= 0 then
-        notify(title .. " @ " .. conn.name .. "/" .. db .. ": sqlcmd вернул " .. code, vim.log.levels.ERROR)
+        notify(o.title .. " @ " .. o.conn.name .. "/" .. db .. ": sqlcmd вернул " .. code, vim.log.levels.ERROR)
       end
-      M.show(
-        ("%s @ %s/%s"):format(title, conn.name, db),
-        text,
-        vim.tbl_extend("force", ctx, { conn = conn.name, db = db }),
-        ft
-      )
+      sqlwin.show({
+        kind = o.kind or "object",
+        title = ("%s @ %s/%s"):format(o.title, o.conn.name, db),
+        text = text,
+        ctx = { file = o.file, conn = o.conn.name, db = db },
+        filetype = o.filetype,
+        bottom = o.bottom,
+      })
     end)
   end)
 end
@@ -289,17 +215,29 @@ function M.define(opts)
   if not name then
     return notify("не понял, какой объект смотреть", vim.log.levels.ERROR)
   end
-  M.target(opts.bang, function(conn, dbs, file)
+  pick(opts.bang, function(conn, dbs, file)
     -- число объектом быть не может, зато это номер сообщения из RAISERROR/THROW
     local id = name:match("^%d+$")
     if id then
-      local args = { "-y0", "-f", "i:65001", "-Q", MESSAGE:format(id) }
-      local ctx = { file = file, kind = "message" }
-      return lookup(conn, { dbs[1] }, 1, "message " .. id, args, ctx, "")
+      return lookup({
+        conn = conn,
+        dbs = { dbs[1] },
+        file = file,
+        title = "message " .. id,
+        args = sql.args({ query = MESSAGE:format(id), trunc = 0 }),
+        kind = "message",
+        filetype = "",
+        bottom = true,
+      }, 1)
     end
     local db, object = split_name(name)
-    local query = DESCRIBE:format((object:gsub("'", "''")))
-    lookup(conn, db and { db } or dbs, 1, object, { "-y0", "-f", "i:65001", "-Q", query }, { file = file }, "sql")
+    lookup({
+      conn = conn,
+      dbs = db and { db } or dbs,
+      file = file,
+      title = object,
+      args = sql.args({ query = DESCRIBE:format((object:gsub("'", "''"))), trunc = 0 }),
+    }, 1)
   end)
 end
 
@@ -310,12 +248,20 @@ function M.rows(opts)
     return notify("не понял, из чего показывать строки", vim.log.levels.ERROR)
   end
   local limit = (opts.count and opts.count > 0) and opts.count or M.rows_limit
-  M.target(opts.bang, function(conn, dbs, file)
+  pick(opts.bang, function(conn, dbs, file)
     local db, object = split_name(name)
-    local query = ("set nocount on; select top %d * from %s;"):format(limit, object)
-    -- -w: без него sqlcmd ломает строку на 80 символах и таблица едет в кашу
-    local args = { "-b", "-y30", "-Y30", "-w", "8000", "-f", "i:65001", "-Q", query }
-    lookup(conn, db and { db } or dbs, 1, object .. " (" .. limit .. ")", args, { file = file }, "")
+    lookup({
+      conn = conn,
+      dbs = db and { db } or dbs,
+      file = file,
+      title = object .. " (" .. limit .. ")",
+      args = sql.args({
+        query = ("set nocount on; select top %d * from %s;"):format(limit, object),
+        width = 8000,
+        trunc = 30,
+      }),
+      filetype = "",
+    }, 1)
   end)
 end
 
@@ -325,47 +271,38 @@ function M.enum(opts)
   if not tostring(id):match("^%-?%d+$") then
     return notify("нужен числовой tvID, а не " .. tostring(id), vim.log.levels.ERROR)
   end
-  M.target(opts.bang, function(conn, dbs, file)
+  pick(opts.bang, function(conn, dbs, file)
     local query = ([[set nocount on;
 select * from usEnumTypeValues t
  where exists (select 1 from usEnumTypeValues where tyID = t.tyID and tvID = %s)
  order by iif(tvID = %s, 1, 0) desc, tvID asc;]]):format(id, id)
-    local args = { "-b", "-y50", "-Y50", "-w", "8000", "-f", "i:65001", "-Q", query }
-    lookup(conn, dbs, 1, "enum " .. id, args, { file = file }, "")
+    lookup({
+      conn = conn,
+      dbs = dbs,
+      file = file,
+      title = "enum " .. id,
+      args = sql.args({ query = query, width = 8000, trunc = 50 }),
+      filetype = "",
+    }, 1)
   end)
-end
-
----Клавиши на буфер: sql-файлы вешает автокоманда, окно с ответом — show().
----Только K и q: остальное глобальное, см. M.setup(). K глобальным быть не может —
----везде, кроме sql, это hover от LSP.
-function M.attach(buf)
-  local function map(mode, lhs, rhs, desc)
-    vim.keymap.set(mode, lhs, rhs, { buffer = buf, desc = desc })
-  end
-  map({ "n", "x" }, "K", "<cmd>SqlDef<cr>", "Код объекта в базе")
-  -- q закрывает только окно ответа. Проверять один buftype нельзя: буфер запроса
-  -- (:SqlQuery) тоже nofile, но ему нужно своё закрытие — с возвратом в файл,
-  -- а не в запрос, — и он вешает q сам (см. config.sqlquery).
-  if vim.bo[buf].buftype == "nofile" and not vim.bo[buf].modifiable then
-    map("n", "q", function()
-      local from = (vim.b[buf].sqlobject or {}).from
-      vim.cmd("close")
-      if from and vim.api.nvim_win_is_valid(from) then
-        vim.api.nvim_set_current_win(from)
-      end
-    end, "Закрыть окно")
-  end
 end
 
 function M.setup()
   -- K в sql-буферах не перебивается hover-маппингом LazyVim: тот отключён для
-  -- filetype sql в спеке nvim-lspconfig (см. lua/plugins/dadbod.lua).
+  -- filetype sql в спеке nvim-lspconfig (см. lua/plugins/dadbod.lua). Глобальным K
+  -- быть не может — везде, кроме sql, это hover от LSP. В окнах с ответом его вешает
+  -- config.sqlwin: там filetype бывает и пустой.
   vim.api.nvim_create_autocmd("FileType", {
     group = vim.api.nvim_create_augroup("sqlobject_keys", { clear = true }),
     pattern = "sql",
     desc = "Клавиши просмотра объектов в sql-буферах",
     callback = function(ev)
-      M.attach(ev.buf)
+      vim.keymap.set(
+        { "n", "x" },
+        "K",
+        "<cmd>SqlDef<cr>",
+        { buffer = ev.buf, desc = "Код объекта в базе" }
+      )
     end,
   })
 

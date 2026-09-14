@@ -12,10 +12,12 @@
 -- переменные, что используют MCP-серверы mssqlclient-* (~/.claude/mcp-servers/*.cmd).
 -- Пароль dev-логина отдельно не указан: sqlcmd сам берёт его из $SQLCMDPASSWORD.
 
--- Свои команды поверх dadbod (общая часть — config.sqlconn):
+-- Свои команды поверх dadbod. Общее лежит в трёх модулях: config.sqlconn (как звать
+-- sqlcmd), config.sqltarget (куда идти для этого файла), config.sqlwin (окна с ответом):
 --   :SqlDeploy (<leader>dd в sql-буферах) — выложить текущий .sql файл в базу
 --   :SqlDef (K), :SqlRows (<leader>dr), :SqlEnum (<leader>de) — посмотреть объект в базе
 --   :SqlQuery (<leader>dq), :SqlRun (<leader>dx) — разовый запрос рядом с процедурой
+require("config.sqltarget").setup()
 require("config.sqldeploy").setup()
 require("config.sqlobject").setup()
 require("config.sqlquery").setup()

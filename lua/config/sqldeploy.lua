@@ -6,24 +6,23 @@
 -- Здесь sqlcmd явно получает -f i:65001, а вдобавок -b/-r (ненулевой код
 -- возврата при ошибке), выбор сервера и баз — в :DB этого нет.
 --
--- Куда выкладывать — по правилам репозитория, см. config.sqlconn.
+-- Куда выкладывать — по правилам репозитория, см. config.sqltarget.
 --
 -- Подключение можно назвать явно: :SqlDeploy! или :SqlDeploy <подключение> [база].
 --
 -- В sql-буферах: <leader>dd — выложить, <leader>dD — выложить, выбрав подключение.
 
 local sql = require("config.sqlconn")
+local target = require("config.sqltarget")
+local sqlwin = require("config.sqlwin")
 
 local M = {}
 
-local function notify(msg, level)
-  sql.notify(msg, level, "SqlDeploy")
-end
+local notify = sql.notifier("SqlDeploy")
 
 ---Кодировка входного файла для sqlcmd: файлы в репозиториях — utf-8,
 ---остаётся распознать по BOM utf-16, который sqlcmd читает сам.
----@return integer|false|nil cp номер кодовой страницы для `-f i:<cp>`;
----false — если входную кодировку задавать не нужно (utf-16 с BOM); nil — не поддерживается
+---@return string? codepage значение для -f; nil — кодировка не поддерживается
 ---@return string? errmsg
 local function input_codepage(path)
   local f, ferr = io.open(path, "rb")
@@ -41,75 +40,46 @@ local function input_codepage(path)
     return nil, "UTF-32 sqlcmd не читает — перекодируйте файл в utf-8 или utf-16"
   end
   if (b1 == 0xFE and b2 == 0xFF) or (b1 == 0xFF and b2 == 0xFE) then
-    return false -- utf-16 с BOM: sqlcmd распознаёт сам
+    -- utf-16 с BOM: вход sqlcmd распознаёт сам, задать остаётся только кодировку вывода
+    return "o:65001"
   end
-  return 65001
-end
-
----Окно с прошлым выводом, если оно ещё открыто: сплит должен быть один на все
----выкладки, а не копиться по одному на каждую.
-local function output_window()
-  for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
-    if vim.b[vim.api.nvim_win_get_buf(win)].sqldeploy_output then
-      return win
-    end
-  end
-end
-
----Вывод sqlcmd в нижнем сплите. Курсор остаётся в файле, если деплой прошёл,
----и переходит в вывод, если sqlcmd вернул ошибку — её сразу надо читать.
-local function show_output(title, lines, ok)
-  local from = vim.api.nvim_get_current_win()
-  local win = output_window()
-  if win then
-    vim.api.nvim_set_current_win(win)
-  else
-    -- split, а не new: :new оставил бы после подмены буфера пустой [No Name] в списке
-    vim.cmd("botright split")
-  end
-  local buf = vim.api.nvim_create_buf(false, true)
-  vim.api.nvim_win_set_buf(0, buf) -- прошлый буфер с bufhidden=wipe тут же удаляется
-  vim.bo[buf].buftype = "nofile"
-  vim.bo[buf].bufhidden = "wipe"
-  vim.bo[buf].swapfile = false
-  vim.b[buf].sqldeploy_output = true
-  vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
-  vim.bo[buf].modifiable = false
-  pcall(vim.api.nvim_buf_set_name, buf, "sqldeploy://" .. title)
-  vim.api.nvim_win_set_height(0, math.min(20, math.max(5, #lines + 1)))
-  vim.keymap.set("n", "q", "<cmd>close<cr>", { buffer = buf, desc = "Закрыть вывод sqlcmd" })
-  if ok and vim.api.nvim_win_is_valid(from) then
-    vim.api.nvim_set_current_win(from)
-  end
+  return "i:65001"
 end
 
 ---Выкладывает файл по очереди в каждую базу: маска часто называет несколько
 ---(0x3000000 -> DataGroup + ICS_UA97), и объект должен появиться во всех.
-local function run(file, conn, databases, how)
-  local cp, cperr = input_codepage(file)
-  if cp == nil then
+---Порядок аргументов — как у колбэка sqltarget.pick.
+local function run(conn, databases, file, how)
+  local codepage, cperr = input_codepage(file)
+  if not codepage then
     return notify(
       cperr or "не удалось определить кодировку файла",
       vim.log.levels.ERROR
     )
   end
-  -- sqlcmd обрезает путь с прямыми слэшами на первом двоеточии ("file C: Access is denied")
-  local input = vim.fs.normalize(file)
-  if vim.fn.has("win32") == 1 then
-    input = input:gsub("/", [[\]])
-  end
 
   local name = vim.fn.fnamemodify(file, ":t")
-  local target = conn.name .. " / " .. table.concat(databases, ", ")
-  notify(("%s -> %s (%s)"):format(name, target, how))
+  local target_name = conn.name .. " / " .. table.concat(databases, ", ")
+  notify(("%s -> %s (%s)"):format(name, target_name, how or "?"))
 
+  local args = sql.args({ input = file, codepage = codepage, stderr = true })
   local lines, failed = {}, {}
   local function finish()
     if #lines > 0 then
-      show_output(name .. " @ " .. target, lines, #failed == 0)
+      sqlwin.show({
+        kind = "deploy",
+        title = name .. " @ " .. target_name,
+        lines = lines,
+        ctx = { file = file, conn = conn.name, db = databases[1] },
+        filetype = "",
+        bottom = true,
+        -- курсор остаётся в файле, если деплой прошёл, и переходит в вывод,
+        -- если sqlcmd вернул ошибку — её сразу надо читать
+        focus = #failed > 0,
+      })
     end
     if #failed == 0 then
-      notify("готово: " .. name .. " -> " .. target)
+      notify("готово: " .. name .. " -> " .. target_name)
     else
       notify("не выложилось: " .. table.concat(failed, ", "), vim.log.levels.ERROR)
     end
@@ -119,10 +89,6 @@ local function run(file, conn, databases, how)
     if not database then
       return vim.schedule(finish)
     end
-    -- Форма именно i:<cp>: от неё sqlcmd пишет вывод в utf-8, а от голого -f <cp> —
-    -- в ANSI-кодировке консоли. Добавлять o:65001 нельзя: вместе с -r эта пара
-    -- переключает весь вывод обратно в ANSI (sqlcmd 15.0.4298.1).
-    local args = { "-b", "-I", "-r", "-f", cp and ("i:" .. cp) or "o:65001", "-i", input }
     sql.sqlcmd(conn, database, args, function(code, text)
       if #databases > 1 then
         lines[#lines + 1] = ("===== %s / %s ====="):format(conn.name, database)
@@ -152,43 +118,19 @@ function M.deploy(opts)
       vim.log.levels.ERROR
     )
   end
-  if vim.fn.executable("sqlcmd") == 0 then
-    return notify("sqlcmd не найден в PATH", vim.log.levels.ERROR)
+  if not sql.ensure("SqlDeploy") then
+    return
   end
 
-  local list = sql.connections(file)
-  if #list == 0 then
-    return notify("не найдено подключений DB_UI_* в .env проекта", vim.log.levels.ERROR)
-  end
-
-  local wanted, override_db = opts.fargs[1], opts.fargs[2]
-  local function go(conn)
-    if not conn then
-      return notify("отменено")
-    end
-    local databases, how = sql.resolve_databases(file, conn, list, override_db)
-    if #databases == 0 then
-      return notify(
-        "не определена база: добавьте её в URL или вызовите :SqlDeploy "
-          .. conn.name
-          .. " <база>",
-        vim.log.levels.ERROR
-      )
-    end
-    run(file, conn, databases, how)
-  end
-
-  if wanted then
-    local conn = sql.by_name(list, wanted)
-    return conn and go(conn) or notify("нет подключения " .. wanted, vim.log.levels.ERROR)
-  end
-  if not opts.bang then
-    local auto = sql.resolve_connection(file, list)
-    if auto then
-      return go(auto)
-    end
-  end
-  sql.select(list, "Выложить " .. vim.fn.fnamemodify(file, ":t") .. " в:", go)
+  target.pick({
+    file = file,
+    bang = opts.bang,
+    name = opts.fargs[1],
+    database = opts.fargs[2],
+    prompt = "Выложить " .. vim.fn.fnamemodify(file, ":t") .. " в:",
+    hint = ". Можно указать явно: :SqlDeploy <подключение> <база>",
+    title = "SqlDeploy",
+  }, run)
 end
 
 function M.setup()

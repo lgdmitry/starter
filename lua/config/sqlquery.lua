@@ -21,16 +21,15 @@
 -- С ! (:SqlQuery!, :SqlRun!) подключение спрашивается.
 
 local sql = require("config.sqlconn")
-local sqlobject = require("config.sqlobject")
+local target = require("config.sqltarget")
+local sqlwin = require("config.sqlwin")
 
 local M = {}
 
 ---До скольких символов sqlcmd режет колонки в выводе (-y/-Y).
 M.column_width = 50
 
-local function notify(msg, level)
-  sql.notify(msg, level, "SqlQuery")
-end
+local notify = sql.notifier("SqlQuery")
 
 ---URL подключения с подменённой базой — для b:db, чтобы в буфере запроса работало
 ---дополнение имён таблиц и колонок (vim-dadbod-completion смотрит именно на b:db).
@@ -71,10 +70,10 @@ local function query_buffer(conn, database, file)
   vim.bo[buf].bufhidden = "hide"
   vim.bo[buf].swapfile = false
   vim.b[buf].db = with_database(conn.url, database)
-  -- b:sqlobject тут же даёт в буфере запроса рабочие K и <leader>dr: они спросят
-  -- ту же базу, а не ту, которую вычислили бы по имени безымянного буфера
-  vim.b[buf].sqlobject = { file = file, conn = conn.name, db = database, kind = "query-input" }
-  vim.b[buf].sqlquery = { file = file, conn = conn.name, db = database }
+  -- b:sqlctx — та же переменная, что у окон с ответом (config.sqlwin): благодаря ей
+  -- K и <leader>dr в черновике спрашивают ту же базу, а не ту, которую вычислили бы
+  -- по имени безымянного буфера
+  vim.b[buf].sqlctx = { file = file, conn = conn.name, db = database }
   pcall(vim.api.nvim_buf_set_name, buf, name)
   vim.bo[buf].filetype = "sql"
   -- Эти две — только здесь: «выполнить весь буфер» в файле процедуры означало бы
@@ -100,23 +99,23 @@ local function query_buffer(conn, database, file)
   return buf
 end
 
----Куда идти: в буфере запроса — ровно то, к чему он привязан, иначе как у :SqlDeploy.
-local function target(bang, cb)
-  local ctx = not bang and vim.b.sqlquery or nil
-  if ctx then
-    local conn = sql.by_name(sql.connections(ctx.file), ctx.conn)
-    if conn then
-      return cb(conn, ctx.db, ctx.file)
-    end
-  end
-  sqlobject.target(bang, function(conn, dbs, file)
+---Куда идти: в черновике и в окне ответа — ровно то, к чему они привязаны, иначе как
+---у :SqlDeploy.
+local function pick(bang, cb)
+  target.pick({
+    ctx = vim.b.sqlctx,
+    file = vim.api.nvim_buf_get_name(0),
+    bang = bang,
+    prompt = "Запрос к:",
+    title = "SqlQuery",
+  }, function(conn, dbs, file)
     cb(conn, dbs[1], file)
   end)
 end
 
 ---:SqlQuery — открыть буфер запроса в вертикальном сплите.
 function M.open(opts)
-  target(opts.bang, function(conn, database, file)
+  pick(opts.bang, function(conn, database, file)
     local from = vim.api.nvim_get_current_win()
     local buf = query_buffer(conn, database, file)
     local shown = vim.fn.bufwinid(buf)
@@ -139,8 +138,8 @@ end
 
 ---:SqlRun — выполнить буфер целиком или строки диапазона (в визуальном режиме — выделение).
 function M.run(opts)
-  if vim.fn.executable("sqlcmd") == 0 then
-    return notify("sqlcmd не найден в PATH", vim.log.levels.ERROR)
+  if not sql.ensure("SqlQuery") then
+    return
   end
   local lines = opts.range > 0 and vim.api.nvim_buf_get_lines(0, opts.line1 - 1, opts.line2, false)
     or vim.api.nvim_buf_get_lines(0, 0, -1, false)
@@ -148,17 +147,12 @@ function M.run(opts)
     return notify("нечего выполнять", vim.log.levels.WARN)
   end
 
-  target(opts.bang, function(conn, database, file)
+  pick(opts.bang, function(conn, database, file)
     -- sqlcmd читает запрос из файла, а не из -Q: через -Q командная строка приезжает
     -- в ANSI и кириллица в литералах бьётся, а с -f i:65001 файл читается как utf-8
     local input = vim.fn.tempname() .. ".sql"
     vim.fn.writefile(lines, input)
-    -- sqlcmd обрезает путь с прямыми слэшами на первом двоеточии (как в :SqlDeploy)
-    if vim.fn.has("win32") == 1 then
-      input = vim.fs.normalize(input):gsub("/", [[\]])
-    end
-    local w = tostring(M.column_width)
-    local args = { "-b", "-I", "-f", "i:65001", "-w", "8000", "-y", w, "-Y", w, "-i", input }
+    local args = sql.args({ input = input, width = 8000, trunc = M.column_width })
 
     notify(("выполняется на %s/%s…"):format(conn.name, database))
     sql.sqlcmd(conn, database, args, function(code, text)
@@ -167,12 +161,14 @@ function M.run(opts)
         if code ~= 0 then
           notify(("sqlcmd вернул %d (%s/%s)"):format(code, conn.name, database), vim.log.levels.ERROR)
         end
-        sqlobject.show(
-          ("запрос @ %s/%s"):format(conn.name, database),
-          text,
-          { file = file, conn = conn.name, db = database, kind = "query" },
-          ""
-        )
+        sqlwin.show({
+          kind = "query",
+          title = ("запрос @ %s/%s"):format(conn.name, database),
+          text = text,
+          ctx = { file = file, conn = conn.name, db = database },
+          filetype = "",
+          bottom = true,
+        })
       end)
     end)
   end)
