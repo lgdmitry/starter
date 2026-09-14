@@ -292,19 +292,26 @@ function M.setup()
   -- filetype sql в спеке nvim-lspconfig (см. lua/plugins/dadbod.lua). Глобальным K
   -- быть не может — везде, кроме sql, это hover от LSP. В окнах с ответом его вешает
   -- config.sqlwin: там filetype бывает и пустой.
+  local function map_key(buf)
+    vim.keymap.set({ "n", "x" }, "K", "<cmd>SqlDef<cr>", { buffer = buf, desc = "Код объекта в базе" })
+  end
   vim.api.nvim_create_autocmd("FileType", {
     group = vim.api.nvim_create_augroup("sqlobject_keys", { clear = true }),
     pattern = "sql",
     desc = "Клавиши просмотра объектов в sql-буферах",
     callback = function(ev)
-      vim.keymap.set(
-        { "n", "x" },
-        "K",
-        "<cmd>SqlDef<cr>",
-        { buffer = ev.buf, desc = "Код объекта в базе" }
-      )
+      map_key(ev.buf)
     end,
   })
+  -- Автокоманды мало: buffer-local маппинг ставится только на будущие sql-буферы, а
+  -- FileType в уже открытых мог случиться раньше этого setup() — тогда :SqlDeploy
+  -- (клавиша глобальная) работает, а K в буфере просто нет. Так же поступает
+  -- Snacks.keymap с ft-маппингами: заводит их и в уже загруженных буферах.
+  for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+    if vim.api.nvim_buf_is_loaded(buf) and vim.bo[buf].filetype == "sql" then
+      map_key(buf)
+    end
+  end
 
   -- Глобально, чтобы группа <leader>d была видна в which-key из любого буфера, а не
   -- только после открытия .sql. Имя объекта берётся из-под курсора, так что осмысленно
