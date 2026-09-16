@@ -29,6 +29,9 @@ return {
         projects = { dev = { "~/dev", "~/projects", "c:/repo" } },
         files = vim.deepcopy(by_mtime),
         git_files = vim.deepcopy(by_mtime),
+        -- дефолт explorer рисует превью в узкой (40 колонок) панели под деревом;
+        -- preview = "main" вместо неё показывает файл в главном окне редактора
+        explorer = { layout = { preview = "main" } },
       },
     },
   },
