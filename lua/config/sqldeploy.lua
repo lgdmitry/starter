@@ -13,7 +13,8 @@
 --
 -- Подключение можно назвать явно: :SqlDeploy! или :SqlDeploy <подключение> [база].
 --
--- В sql-буферах: <leader>dd — выложить, <leader>dD — выложить, выбрав подключение.
+-- В sql-буферах: <leader>dd — выложить, <leader>dD — выложить, выбрав подключение,
+-- <leader>dc — прервать выкладку (:SqlCancel, см. config.sqlconn).
 
 local sql = require("config.sqlconn")
 local target = require("config.sqltarget")
@@ -63,11 +64,17 @@ local function run(conn, databases, file, how)
 
   local name = vim.fn.fnamemodify(file, ":t")
   local target_name = conn.name .. " / " .. table.concat(databases, ", ")
-  notify(("%s -> %s (%s)"):format(name, target_name, how or "?"))
+  -- не разовое уведомление, а живущее до конца выкладки: sqlcmd на большом файле
+  -- думает долго, а на нескольких базах ещё и по разу на каждую — без крутилки
+  -- между «выкладываю» и «готово» непонятно, идёт что-то или уже нет
+  local done, step_msg =
+    sql.progress(("%s -> %s (%s, <leader>dc — отменить)"):format(name, target_name, how or "?"), "SqlDeploy")
 
   local args = sql.args({ input = file, codepage = codepage, stderr = true })
   local lines, failed = {}, {}
+  local cancelled = false
   local function finish()
+    done()
     if #lines > 0 then
       sqlwin.show({
         kind = "deploy",
@@ -81,7 +88,11 @@ local function run(conn, databases, file, how)
         focus = #failed > 0,
       })
     end
-    if #failed == 0 then
+    if cancelled then
+      -- отдельным сообщением, а не «готово»: часть баз осталась со старой версией
+      -- объекта, а та, на которой прервали, — вообще неизвестно с какой
+      notify("прервано: " .. name .. " -> " .. target_name, vim.log.levels.WARN)
+    elseif #failed == 0 then
       notify("готово: " .. name .. " -> " .. target_name)
     else
       notify("не выложилось: " .. table.concat(failed, ", "), vim.log.levels.ERROR)
@@ -92,11 +103,19 @@ local function run(conn, databases, file, how)
     if not database then
       return vim.schedule(finish)
     end
-    sql.sqlcmd(conn, database, args, function(code, text)
+    if #databases > 1 then
+      step_msg(("%s -> %s/%s (%d из %d)"):format(name, conn.name, database, i, #databases))
+    end
+    local started = sql.sqlcmd(conn, database, args, function(code, text, stopped)
       if #databases > 1 then
         lines[#lines + 1] = ("===== %s / %s ====="):format(conn.name, database)
       end
       vim.list_extend(lines, vim.split(text, "\n", { trimempty = true }))
+      if stopped then
+        -- отменили — до остальных баз не идём, показываем то, что успело выложиться
+        cancelled = true
+        return vim.schedule(finish)
+      end
       if code ~= 0 then
         failed[#failed + 1] = database .. " (код " .. code .. ")"
       end
@@ -104,6 +123,9 @@ local function run(conn, databases, file, how)
         step(i + 1)
       end)
     end)
+    if not started then
+      done() -- процесс не запустился, колбэка не будет — гасим сами
+    end
   end
   step(1)
 end

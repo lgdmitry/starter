@@ -17,6 +17,8 @@
 --   :SqlDeploy (<leader>dd в sql-буферах) — выложить текущий .sql файл в базу
 --   :SqlDef (K), :SqlRows (<leader>dr), :SqlEnum (<leader>de) — посмотреть объект в базе
 --   :SqlQuery (<leader>dq), :SqlRun (<leader>dx) — разовый запрос рядом с процедурой
+--   :SqlCancel (<leader>dc) — прервать выполняющийся sqlcmd (запросы асинхронные)
+require("config.sqlconn").setup()
 require("config.sqltarget").setup()
 require("config.sqldeploy").setup()
 require("config.sqlobject").setup()

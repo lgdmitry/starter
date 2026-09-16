@@ -15,6 +15,7 @@
 --   <leader>dq   — открыть буфер запроса для подключения/базы текущего файла
 --   <leader>dQ   — то же, но подключение спрашивается
 --   <leader>dx   — выполнить выделенное (в визуальном режиме)
+--   <leader>dc   — прервать выполняющийся sqlcmd (:SqlCancel, см. config.sqlconn)
 -- В самом буфере запроса <leader>dx работает и в обычном режиме — на весь буфер,
 -- а q закрывает окно, как и в окне с ответом (ценой записи макросов: в черновике
 -- запроса она нужна реже, чем закрыть его тем же движением, что и ответ).
@@ -154,10 +155,21 @@ function M.run(opts)
     vim.fn.writefile(lines, input)
     local args = sql.args({ input = input, width = 8000, trunc = M.column_width })
 
-    notify(("выполняется на %s/%s…"):format(conn.name, database))
-    sql.sqlcmd(conn, database, args, function(code, text)
+    -- не разовое уведомление, а живущее до ответа: запрос может думать десятки
+    -- секунд, и всё это время единственный признак работы — эта крутилка
+    local done = sql.progress(
+      ("выполняется на %s/%s… (<leader>dc — отменить)"):format(conn.name, database),
+      "SqlQuery"
+    )
+    local started = sql.sqlcmd(conn, database, args, function(code, text, cancelled)
       vim.schedule(function()
+        done()
         os.remove(input)
+        -- после отмены sqlcmd отдаёт обрывок вывода или пустоту — показывать нечего,
+        -- а окно с ответом ещё и затёрло бы прошлый, настоящий результат
+        if cancelled then
+          return
+        end
         if code ~= 0 then
           notify(("sqlcmd вернул %d (%s/%s)"):format(code, conn.name, database), vim.log.levels.ERROR)
         end
@@ -171,6 +183,10 @@ function M.run(opts)
         })
       end)
     end)
+    if not started then
+      done() -- процесс не запустился, ответа не будет — гасим сами
+      os.remove(input)
+    end
   end)
 end
 

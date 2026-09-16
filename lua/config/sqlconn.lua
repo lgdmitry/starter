@@ -17,6 +17,51 @@ function M.notifier(title)
   end
 end
 
+---Индикатор «идёт запрос»: обычное уведомление гаснет через пару секунд, а sqlcmd
+---на тяжёлой выборке думает и полминуты — всё это время непонятно, идёт что-то или
+---уже ничего. Уведомление с крутилкой держится ровно пока живёт процесс.
+local SPINNER = { "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏" }
+local progress_seq = 0
+
+---@return fun() stop погасить индикатор; вызывать в основном цикле
+---@return fun(msg: string) update сменить текст, не заводя второе уведомление
+function M.progress(msg, title)
+  local function update(new)
+    msg = new
+  end
+  -- Snacks.notifier умеет обновлять уведомление по id и держать его без таймаута;
+  -- без него (голый vim.notify) крутилка насыпала бы по сообщению на кадр
+  local notifier = _G.Snacks and Snacks.notifier
+  if not notifier then
+    M.notify(msg, nil, title)
+    return function() end, update
+  end
+  progress_seq = progress_seq + 1
+  local id = "sqlprogress" .. progress_seq
+  local timer, frame = vim.uv.new_timer(), 0
+  local function draw()
+    frame = frame % #SPINNER + 1
+    notifier.notify(msg, vim.log.levels.INFO, {
+      id = id,
+      title = title or "SQL",
+      icon = SPINNER[frame],
+      timeout = false,
+      history = false, -- в истории уведомлений от крутилки толку нет
+    })
+  end
+  draw()
+  timer:start(100, 100, vim.schedule_wrap(draw))
+  local function stop()
+    if timer then
+      timer:stop()
+      timer:close()
+      timer = nil
+    end
+    notifier.hide(id)
+  end
+  return stop, update
+end
+
 function M.read_file(path)
   local f = io.open(path, "rb")
   if not f then
@@ -198,21 +243,47 @@ function M.ensure(title)
   return false
 end
 
+---Запущенные прямо сейчас sqlcmd. Общий список, а не хэндл у того, кто запускал:
+---запрос асинхронный, и отменяют его обычно уже из другого окна.
+local jobs = {}
+
+---Отменить всё, что сейчас выполняется: убиваем сам sqlcmd, а сервер, заметив
+---оборванное соединение, гасит и сам запрос.
+---@return string[] какие подключения/базы были остановлены
+function M.cancel()
+  local stopped = {}
+  for job in pairs(jobs) do
+    job.cancelled = true -- колбэк всё равно придёт, и по флагу видно, что ответа в нём нет
+    pcall(function()
+      job.proc:kill("sigterm") -- на Windows libuv всё равно завершает процесс принудительно
+    end)
+    stopped[#stopped + 1] = job.label
+  end
+  return stopped
+end
+
 ---sqlcmd на подключении conn в базе database с аргументами extra.
----@param on_done fun(code: integer, text: string) вызывается вне основного цикла
----@return boolean запущен ли процесс
+---@param on_done fun(code: integer, text: string, cancelled: boolean) вызывается вне основного цикла
+---@return table? процесс; nil — sqlcmd не нашёлся, запускать было нечего
 function M.sqlcmd(conn, database, extra, on_done)
   if not M.ensure() then
-    return false
+    return nil
   end
   local args, env = M.auth_args(conn.url)
   local cmd = vim.list_extend({ "sqlcmd" }, args)
   vim.list_extend(cmd, { "-d", database })
   vim.list_extend(cmd, extra)
-  vim.system(cmd, { env = env }, function(res)
-    on_done(res.code, (M.output_to_utf8((res.stdout or "") .. (res.stderr or "")):gsub("\r", "")))
+  local job = { label = conn.name .. "/" .. database }
+  job.proc = vim.system(cmd, { env = env }, function(res)
+    jobs[job] = nil
+    on_done(
+      res.code,
+      (M.output_to_utf8((res.stdout or "") .. (res.stderr or "")):gsub("\r", "")),
+      job.cancelled == true
+    )
   end)
-  return true
+  jobs[job] = true
+  return job.proc
 end
 
 ---Разовый запрос одной колонки через sqlcmd, синхронно (ответ короткий и быстрый).
@@ -237,6 +308,25 @@ function M.query(conn, database, sql)
     end
   end
   return rows
+end
+
+---:SqlCancel — команда общая на все: отменяют не «деплой» или «запрос», а то, что
+---сейчас крутится, а знает об этом только список jobs.
+function M.setup()
+  vim.keymap.set(
+    "n",
+    "<leader>dc",
+    "<cmd>SqlCancel<cr>",
+    { desc = "Отменить выполняющийся sqlcmd" }
+  )
+  vim.api.nvim_create_user_command("SqlCancel", function()
+    local stopped = M.cancel()
+    if #stopped == 0 then
+      M.notify("нечего отменять", vim.log.levels.WARN)
+    else
+      M.notify("отменено: " .. table.concat(stopped, ", "), vim.log.levels.WARN)
+    end
+  end, { desc = "Прервать выполняющиеся sqlcmd (:SqlRun, :SqlDeploy)" })
 end
 
 return M
