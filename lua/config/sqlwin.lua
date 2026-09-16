@@ -1,21 +1,29 @@
 -- Окна с ответом sqlcmd: код объекта, строки таблицы, текст сообщения, вывод деплоя.
 -- Раньше то же самое было написано дважды — в sqldeploy и в sqlobject.
 --
--- Окно одно на вид (kind): следующий :SqlDef переиспользует окно кода, а не копит
--- сплиты, и при этом не занимает собой окно с текстом сообщения или с выводом деплоя.
+-- Окон на всё про всё два, и следующий ответ ложится в готовое, а не добавляет сплит:
+-- код объекта — в вертикальном справа, всё, что читают как вывод (текст сообщения,
+-- строки таблицы, результат запроса, деплой), — в нижнем. То есть <leader>dx после
+-- <leader>dd покажет результат там же, где лежал вывод деплоя.
 --
 -- В буфере остаются две переменные:
---   b:sqlwin — вид окна и куда вернуть курсор по q (внутренняя кухня этого модуля);
+--   b:sqlwin — вид окна, его место и куда вернуть курсор по q (кухня этого модуля);
 --   b:sqlctx — где смотрели (file/conn/db). Из неё K, :SqlRows и :SqlRun внутри окна
 --              берут подключение и базу, то есть ходят туда же, откуда ответ.
 
 local M = {}
 
----Окно нужного вида, если оно ещё открыто в этой вкладке.
-local function window_of(kind)
+---Место окна: нижний сплит один на все виды вывода, вертикальный — на код объекта.
+---Виды (kind) при этом остаются разными: по ним видно, что в окне показано.
+local function slot_of(o)
+  return o.bottom and "bottom" or "side"
+end
+
+---Окно на нужном месте, если оно ещё открыто в этой вкладке.
+local function window_of(slot)
   for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
     local w = vim.b[vim.api.nvim_win_get_buf(win)].sqlwin
-    if w and w.kind == kind then
+    if w and w.slot == slot then
       return win
     end
   end
@@ -35,7 +43,8 @@ local function keys(buf)
 end
 
 ---@param o table
----  kind     — вид окна, своё на каждый: object / message / query / deploy
+---  kind     — что показано: object / message / query / deploy (на выбор окна не
+---             влияет, окно выбирает bottom)
 ---  title    — имя буфера после sql://
 ---  text     — содержимое одной строкой (или lines — уже готовыми строками)
 ---  ctx      — где смотрели: file, conn, db
@@ -50,7 +59,8 @@ function M.show(o)
   end
 
   local from = vim.api.nvim_get_current_win()
-  local win = window_of(o.kind)
+  local slot = slot_of(o)
+  local win = window_of(slot)
   -- Куда вернуть курсор по q. Само окно ответа origin'ом быть не может: K внутри него
   -- переиспользует это же окно, и тогда q возвращал бы в него же — наследуем прошлый.
   if win == from then
@@ -73,7 +83,7 @@ function M.show(o)
   vim.bo[buf].swapfile = false
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
   vim.bo[buf].modifiable = false
-  vim.b[buf].sqlwin = { kind = o.kind, from = from }
+  vim.b[buf].sqlwin = { kind = o.kind, slot = slot, from = from }
   vim.b[buf].sqlctx = o.ctx
   vim.bo[buf].filetype = o.filetype or "sql"
   keys(buf)
