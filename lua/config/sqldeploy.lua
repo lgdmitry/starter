@@ -8,6 +8,9 @@
 --
 -- Куда выкладывать — по правилам репозитория, см. config.sqltarget.
 --
+-- Несохранённый буфер сохраняется сам: sqlcmd читает файл с диска, и без этого
+-- выложилась бы предыдущая версия — молча и незаметно.
+--
 -- Подключение можно назвать явно: :SqlDeploy! или :SqlDeploy <подключение> [база].
 --
 -- В sql-буферах: <leader>dd — выложить, <leader>dD — выложить, выбрав подключение.
@@ -112,11 +115,12 @@ function M.deploy(opts)
   if file == "" or vim.bo.buftype ~= "" then
     return notify("нет файла в буфере", vim.log.levels.ERROR)
   end
+  -- sqlcmd читает файл с диска, а не буфер: без записи выложилась бы прошлая версия
   if vim.bo.modified then
-    return notify(
-      "буфер не сохранён: sqlcmd читает файл с диска, сначала :w",
-      vim.log.levels.ERROR
-    )
+    local ok, err = pcall(vim.cmd.write)
+    if not ok then
+      return notify("не сохранился буфер: " .. tostring(err), vim.log.levels.ERROR)
+    end
   end
   if not sql.ensure("SqlDeploy") then
     return
