@@ -7,7 +7,8 @@
 --
 -- В sql-буферах и в окне с ответом:
 --   K            — код объекта под курсором или выделенного, а на числе — текст
---                  сообщения с этим номером (K прямо на номере в RAISERROR(60003, ...))
+--                  сообщения с этим номером (в RAISERROR(60003, ...) и THROW) либо
+--                  значения enum с таким tvID (в любом другом месте)
 --   <leader>dr   — первые строки таблицы/вьюхи
 --   <leader>de   — значения enum по tvID под курсором
 --   q            — закрыть окно с ответом
@@ -105,7 +106,21 @@ else select string_agg(cast(text as nvarchar(max)) collate database_default, @se
   from sys.messages where message_id = @id;
 ]==]
 
+-- Значения того же enum, что и запрошенный tvID (как show enum в SQLTools). Сам запрос
+-- спрятан в exec: в базе, где usEnumTypeValues нет, иначе не компилируется весь пакет и
+-- вместо '#NOTFOUND#' приезжает ошибка — а с ней lookup не пойдёт искать в следующей базе.
+local ENUM = [==[
+set nocount on;
+if object_id(N'usEnumTypeValues') is null select '#NOTFOUND#';
+else exec(N'
+if not exists (select 1 from usEnumTypeValues where tvID = %s) select ''#NOTFOUND#'';
+else select * from usEnumTypeValues t
+  where exists (select 1 from usEnumTypeValues where tyID = t.tyID and tvID = %s)
+  order by iif(tvID = %s, 1, 0) desc, tvID asc;');
+]==]
+
 ---Слово под курсором вместе с точками и скобками: dbo.usBases, [icsMaster].[dbo].[x].
+---@return string? name, integer? col колонка, с которой слово начинается
 local function object_under_cursor()
   local line = vim.api.nvim_get_current_line()
   local col = vim.api.nvim_win_get_cursor(0)[2] + 1
@@ -123,7 +138,10 @@ local function object_under_cursor()
     e = e + 1
   end
   local name = line:sub(s, e):gsub("^%.+", ""):gsub("%.+$", "")
-  return name ~= "" and name or nil
+  if name == "" then
+    return nil
+  end
+  return name, s
 end
 
 ---Выделенный текст, если команда вызвана из визуального режима.
@@ -142,8 +160,34 @@ local function selected_text()
 end
 
 ---Имя из аргумента команды, из выделения или из-под курсора.
+---@return string? name, integer? col колонка начала слова — только когда оно взято
+---из-под курсора: по тому, что стоит перед числом, отличается номер сообщения от tvID
 local function wanted_object(fargs)
-  return (fargs and fargs[1]) or selected_text() or object_under_cursor()
+  local explicit = (fargs and fargs[1]) or selected_text()
+  if explicit then
+    return explicit
+  end
+  return object_under_cursor()
+end
+
+---Число под курсором — номер сообщения или значение enum? Решает то, что стоит перед
+---ним: в RAISERROR(60003, ...) и THROW 60003, ... это сообщение, в любом другом месте
+---(where tvID = 1080, @state = 1080) — tvID из usEnumTypeValues.
+---@param col integer? колонка начала числа; nil — имя назвали явно или выделили,
+---контекста нет, и сообщение вероятнее: аргументом обычно спрашивают именно про него
+local function message_context(col)
+  if not col then
+    return true
+  end
+  local row = vim.api.nvim_win_get_cursor(0)[1]
+  -- RAISERROR часто переносят, и открывающая скобка остаётся на предыдущей строке
+  local lines = vim.api.nvim_buf_get_lines(0, math.max(row - 3, 0), row, false)
+  if #lines == 0 then
+    return true
+  end
+  lines[#lines] = vim.api.nvim_get_current_line():sub(1, col - 1)
+  local before = table.concat(lines, "\n"):lower():gsub("%s+$", "")
+  return before:match("%f[%w_]raiserror%s*%(?$") ~= nil or before:match("%f[%w_]throw$") ~= nil
 end
 
 ---Разбирает [база].[схема].[объект]: базу отдаёт отдельно, остальное — в скобках,
@@ -180,17 +224,32 @@ local function pick(bang, cb)
   }, cb)
 end
 
+---Маркер «не нашлось» ищем отдельной строкой, а не сравнением всего ответа: при -y 0
+---sqlcmd печатает одно значение, а при -y N — ещё и пустую шапку со строкой дефисов.
+local function not_found(text)
+  for _, line in ipairs(vim.split(text, "\n")) do
+    if vim.trim(line) == "#NOTFOUND#" then
+      return true
+    end
+  end
+  return false
+end
+
 ---Гоняет запрос по базам подряд, пока объект не найдётся: файл лежит в ics_ua97, а
 ---объект рядом с ним вполне может жить в icsMaster.
----@param o table conn, dbs, title, args, ctx и всё, что нужно окну: kind, filetype, bottom
+---@param o table conn, dbs, title, args, ctx и всё, что нужно окну: kind, filetype, bottom;
+---on_missing — что делать, когда базы кончились (по умолчанию сказать, что не нашли)
 local function lookup(o, i)
   local db = o.dbs[i]
   if not db then
+    if o.on_missing then
+      return o.on_missing()
+    end
     return notify(o.title .. ": не найден в " .. table.concat(o.dbs, ", "), vim.log.levels.WARN)
   end
   sql.sqlcmd(o.conn, db, o.args, function(code, text)
     vim.schedule(function()
-      if vim.trim(text) == "#NOTFOUND#" then
+      if not_found(text) then
         return lookup(o, i + 1)
       end
       if code ~= 0 then
@@ -208,27 +267,60 @@ local function lookup(o, i)
   end)
 end
 
+---Текст сообщения по номеру — в первой же базе: сообщения общие для сервера.
+local function message_job(conn, dbs, file, id)
+  return {
+    conn = conn,
+    dbs = { dbs[1] },
+    file = file,
+    title = "message " .. id,
+    args = sql.args({ query = MESSAGE:format(id), trunc = 0 }),
+    kind = "message",
+    filetype = "",
+    bottom = true,
+  }
+end
+
+---Значения enum по tvID — тем же окном, что и состав объекта.
+local function enum_job(conn, dbs, file, id)
+  return {
+    conn = conn,
+    dbs = dbs,
+    file = file,
+    title = "enum " .. id,
+    args = sql.args({ query = ENUM:format(id, id, id), width = 8000, trunc = 50 }),
+    filetype = "",
+  }
+end
+
 ---:SqlDef — код объекта (процедура/функция/вьюха/триггер), состав таблицы, а на числе —
----текст сообщения с этим номером: K прямо на номере внутри RAISERROR(60003, ...).
+---текст сообщения (K прямо на номере внутри RAISERROR(60003, ...)) или значения enum.
 function M.define(opts)
-  local name = wanted_object(opts.fargs)
+  local name, col = wanted_object(opts.fargs)
   if not name then
     return notify("не понял, какой объект смотреть", vim.log.levels.ERROR)
   end
   pick(opts.bang, function(conn, dbs, file)
-    -- число объектом быть не может, зато это номер сообщения из RAISERROR/THROW
+    -- число объектом быть не может: это либо номер сообщения из RAISERROR/THROW, либо
+    -- tvID. Что именно — видно по соседям числа, но номера сообщений и tvID лежат в
+    -- пересекающихся диапазонах, да и контекст можно не угадать: не нашлось одного —
+    -- показываем другое
     local id = name:match("^%d+$")
     if id then
-      return lookup({
-        conn = conn,
-        dbs = { dbs[1] },
-        file = file,
-        title = "message " .. id,
-        args = sql.args({ query = MESSAGE:format(id), trunc = 0 }),
-        kind = "message",
-        filetype = "",
-        bottom = true,
-      }, 1)
+      local first, second = message_job(conn, dbs, file, id), enum_job(conn, dbs, file, id)
+      if not message_context(col) then
+        first, second = second, first
+      end
+      first.on_missing = function()
+        lookup(second, 1)
+      end
+      second.on_missing = function()
+        notify(
+          id .. ": нет ни сообщения с таким номером, ни enum с таким tvID",
+          vim.log.levels.WARN
+        )
+      end
+      return lookup(first, 1)
     end
     local db, object = split_name(name)
     lookup({
@@ -272,18 +364,7 @@ function M.enum(opts)
     return notify("нужен числовой tvID, а не " .. tostring(id), vim.log.levels.ERROR)
   end
   pick(opts.bang, function(conn, dbs, file)
-    local query = ([[set nocount on;
-select * from usEnumTypeValues t
- where exists (select 1 from usEnumTypeValues where tyID = t.tyID and tvID = %s)
- order by iif(tvID = %s, 1, 0) desc, tvID asc;]]):format(id, id)
-    lookup({
-      conn = conn,
-      dbs = dbs,
-      file = file,
-      title = "enum " .. id,
-      args = sql.args({ query = query, width = 8000, trunc = 50 }),
-      filetype = "",
-    }, 1)
+    lookup(enum_job(conn, dbs, file, id), 1)
   end)
 end
 
