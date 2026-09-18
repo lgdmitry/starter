@@ -11,6 +11,8 @@
 --                  значения enum с таким tvID (в любом другом месте)
 --   <leader>dr   — первые строки таблицы/вьюхи
 --   <leader>de   — значения enum по tvID под курсором
+--   gf           — открыть файл этого объекта в репозитории (:SqlFile), в отличие
+--                  от K, который показывает то, что реально лежит в базе
 --   q            — закрыть окно с ответом
 -- Имя можно назвать явно: :SqlDef dbo.dc_UpdDocument, :SqlDef icsMaster.dbo.usBases,
 -- :50SqlRows tEmploy. С ! (:SqlDef!) подключение спрашивается.
@@ -368,6 +370,58 @@ function M.enum(opts)
   end)
 end
 
+---:SqlFile (gf) — открыть файл объекта под курсором прямо из репозитория.
+---Объекты лежат по одному в файле <имя>_PRC|TAB|VIW|TRG|FNC|FK.sql, поэтому имени
+---хватает, чтобы найти файл точным glob'ом: одно совпадение открывается сразу, без
+---пикера. Регистр не важен — в репозитории попадается и .SQL.
+---С ! (:SqlFile!) пикер показывается всегда, даже когда файл ровно один.
+function M.file(opts)
+  local name = wanted_object(opts.fargs)
+  if not name then
+    return notify("не понял, какой файл искать", vim.log.levels.ERROR)
+  end
+  -- в имени файла ни базы, ни схемы: [icsMaster].[dbo].[usBases] -> usBases
+  local object = name:gsub("[%[%]]", ""):match("[%w_@#%$]+$")
+  if not object then
+    return notify("не понял, какой файл искать: " .. name, vim.log.levels.ERROR)
+  end
+  -- у безымянного буфера (черновик запроса, окно с ответом) репозитория нет — ищем
+  -- от текущего каталога, как это делает Find Files
+  local file = vim.api.nvim_buf_get_name(0)
+  local root = vim.fs.normalize((file ~= "" and vim.fs.root(file, ".git")) or vim.fn.getcwd())
+  local glob = object .. "_*.sql"
+  -- fd берём тот же, что и пикер: там он уже найден и проверен
+  local cmd, args = require("snacks.picker.source.files").get_fd()
+  if not cmd then
+    return
+  end
+  vim.list_extend(args, { "--ignore-case", "--glob", glob, root })
+  table.insert(args, 1, cmd)
+  -- асинхронно: по холодному кэшу fd бегает по репозиторию до секунды, а клавиша
+  -- нажимается посреди чтения кода
+  vim.system(args, { text = true }, function(res)
+    local files = vim.split((res.stdout or ""):gsub("\r", ""), "\n", { trimempty = true })
+    vim.schedule(function()
+      if #files == 1 and not opts.bang then
+        return vim.cmd.edit(vim.fn.fnameescape(files[1]))
+      end
+      -- нашлось несколько (_TAB и _VIW, копия в соседней базе) — выбрать из них;
+      -- не нашлось ничего — фаззи по имени: имя объекта не обязано совпадать с именем
+      -- файла (Alter-скрипты, объект из другого репозитория)
+      Snacks.picker.files(#files > 0 and {
+        cwd = root,
+        search = glob,
+        args = { "--ignore-case", "--glob" },
+        title = object,
+      } or {
+        cwd = root,
+        pattern = object,
+        title = object,
+      })
+    end)
+  end)
+end
+
 function M.setup()
   -- K в sql-буферах не перебивается hover-маппингом LazyVim: тот отключён для
   -- filetype sql в спеке nvim-lspconfig (см. lua/plugins/dadbod.lua). Глобальным K
@@ -375,6 +429,14 @@ function M.setup()
   -- config.sqlwin: там filetype бывает и пустой.
   local function map_key(buf)
     vim.keymap.set({ "n", "x" }, "K", "<cmd>SqlDef<cr>", { buffer = buf, desc = "Код объекта в базе" })
+    -- gf только в sql-буферах: в остальных это встроенный переход по пути под курсором,
+    -- а в .sql путей не бывает — зато бывают имена объектов, у каждого свой файл
+    vim.keymap.set(
+      { "n", "x" },
+      "gf",
+      "<cmd>SqlFile<cr>",
+      { buffer = buf, desc = "Файл объекта в репозитории" }
+    )
   end
   vim.api.nvim_create_autocmd("FileType", {
     group = vim.api.nvim_create_augroup("sqlobject_keys", { clear = true }),
@@ -415,6 +477,11 @@ function M.setup()
     0
   )
   command("SqlEnum", M.enum, "Показать значения enum по tvID")
+  command(
+    "SqlFile",
+    M.file,
+    "Открыть файл объекта в репозитории (! — всегда через пикер)"
+  )
 end
 
 return M
