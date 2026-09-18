@@ -15,6 +15,9 @@
 --
 -- В sql-буферах: <leader>dd — выложить, <leader>dD — выложить, выбрав подключение,
 -- <leader>dc — прервать выкладку (:SqlCancel, см. config.sqlconn).
+--
+-- Пачкой: :SqlDeployFiles <файлы> и то же <leader>dd по выделенным (Tab) записям в
+-- snacks-пикере и explorer (действие заведено в lua/plugins/snacks.lua).
 
 local sql = require("config.sqlconn")
 local target = require("config.sqltarget")
@@ -50,27 +53,58 @@ local function input_codepage(path)
   return "i:65001"
 end
 
----Выкладывает файл по очереди в каждую базу: маска часто называет несколько
----(0x3000000 -> DataGroup + ICS_UA97), и объект должен появиться во всех.
----Порядок аргументов — как у колбэка sqltarget.pick.
-local function run(conn, databases, file, how)
-  local codepage, cperr = input_codepage(file)
-  if not codepage then
-    return notify(
-      cperr or "не удалось определить кодировку файла",
-      vim.log.levels.ERROR
-    )
+---Имена подключений пачки без повторов — для заголовка окна с ответом.
+local function conn_names(jobs)
+  local seen, names = {}, {}
+  for _, job in ipairs(jobs) do
+    if not seen[job.conn.name] then
+      seen[job.conn.name] = true
+      names[#names + 1] = job.conn.name
+    end
+  end
+  return names
+end
+
+---Выкладывает по очереди: каждый файл — в каждую свою базу. Баз обычно несколько
+---(маска часто называет их пачкой: 0x3000000 -> DataGroup + ICS_UA97), и объект
+---должен появиться во всех; файлов больше одного, когда выкладывают выделенное в
+---пикере (см. M.deploy_files).
+---@param jobs { conn: table, databases: string[], file: string, how: string? }[]
+local function run_jobs(jobs)
+  local steps = {}
+  for _, job in ipairs(jobs) do
+    local codepage, cperr = input_codepage(job.file)
+    if not codepage then
+      return notify(
+        vim.fn.fnamemodify(job.file, ":t")
+          .. ": "
+          .. (cperr or "не удалось определить кодировку файла"),
+        vim.log.levels.ERROR
+      )
+    end
+    for _, database in ipairs(job.databases) do
+      steps[#steps + 1] = { conn = job.conn, database = database, file = job.file, codepage = codepage }
+    end
+  end
+  if #steps == 0 then
+    return
   end
 
-  local name = vim.fn.fnamemodify(file, ":t")
-  local target_name = conn.name .. " / " .. table.concat(databases, ", ")
+  local single = #jobs == 1
+  local what = single and vim.fn.fnamemodify(jobs[1].file, ":t") or ("файлов: " .. #jobs)
+  -- для пачки в заголовке только сервер(ы): базы у каждого файла свои, перечислять
+  -- их все — строка, которую никто не прочитает
+  local target_name = single and (jobs[1].conn.name .. " / " .. table.concat(jobs[1].databases, ", "))
+    or table.concat(conn_names(jobs), ", ")
   -- не разовое уведомление, а живущее до конца выкладки: sqlcmd на большом файле
   -- думает долго, а на нескольких базах ещё и по разу на каждую — без крутилки
   -- между «выкладываю» и «готово» непонятно, идёт что-то или уже нет
-  local done, step_msg =
-    sql.progress(("%s -> %s (%s, <leader>dc — отменить)"):format(name, target_name, how or "?"), "SqlDeploy")
+  local done, step_msg = sql.progress(
+    single and ("%s -> %s (%s, <leader>dc — отменить)"):format(what, target_name, jobs[1].how or "?")
+      or ("выкладываю %s (<leader>dc — отменить)"):format(what),
+    "SqlDeploy"
+  )
 
-  local args = sql.args({ input = file, codepage = codepage, stderr = true })
   local lines, failed = {}, {}
   local cancelled = false
   local function finish()
@@ -78,9 +112,9 @@ local function run(conn, databases, file, how)
     if #lines > 0 then
       sqlwin.show({
         kind = "deploy",
-        title = name .. " @ " .. target_name,
+        title = what .. " @ " .. target_name,
         lines = lines,
-        ctx = { file = file, conn = conn.name, db = databases[1] },
+        ctx = { file = steps[1].file, conn = steps[1].conn.name, db = steps[1].database },
         filetype = "",
         bottom = true,
         -- курсор остаётся в файле, если деплой прошёл, и переходит в вывод,
@@ -91,33 +125,35 @@ local function run(conn, databases, file, how)
     if cancelled then
       -- отдельным сообщением, а не «готово»: часть баз осталась со старой версией
       -- объекта, а та, на которой прервали, — вообще неизвестно с какой
-      notify("прервано: " .. name .. " -> " .. target_name, vim.log.levels.WARN)
+      notify("прервано: " .. what .. " -> " .. target_name, vim.log.levels.WARN)
     elseif #failed == 0 then
-      notify("готово: " .. name .. " -> " .. target_name)
+      notify("готово: " .. what .. " -> " .. target_name)
     else
       notify("не выложилось: " .. table.concat(failed, ", "), vim.log.levels.ERROR)
     end
   end
   local function step(i)
-    local database = databases[i]
-    if not database then
+    local cur = steps[i]
+    if not cur then
       return vim.schedule(finish)
     end
-    if #databases > 1 then
-      step_msg(("%s -> %s/%s (%d из %d)"):format(name, conn.name, database, i, #databases))
+    local name = vim.fn.fnamemodify(cur.file, ":t")
+    if #steps > 1 then
+      step_msg(("%s -> %s/%s (%d из %d)"):format(name, cur.conn.name, cur.database, i, #steps))
     end
-    local started = sql.sqlcmd(conn, database, args, function(code, text, stopped)
-      if #databases > 1 then
-        lines[#lines + 1] = ("===== %s / %s ====="):format(conn.name, database)
+    local args = sql.args({ input = cur.file, codepage = cur.codepage, stderr = true })
+    local started = sql.sqlcmd(cur.conn, cur.database, args, function(code, text, stopped)
+      if #steps > 1 then
+        lines[#lines + 1] = ("===== %s @ %s/%s ====="):format(name, cur.conn.name, cur.database)
       end
       vim.list_extend(lines, vim.split(text, "\n", { trimempty = true }))
       if stopped then
-        -- отменили — до остальных баз не идём, показываем то, что успело выложиться
+        -- отменили — до остальных шагов не идём, показываем то, что успело выложиться
         cancelled = true
         return vim.schedule(finish)
       end
       if code ~= 0 then
-        failed[#failed + 1] = database .. " (код " .. code .. ")"
+        failed[#failed + 1] = (single and "" or name .. " / ") .. cur.database .. " (код " .. code .. ")"
       end
       vim.schedule(function()
         step(i + 1)
@@ -128,6 +164,11 @@ local function run(conn, databases, file, how)
     end
   end
   step(1)
+end
+
+---Один файл — форма колбэка sqltarget.pick.
+local function run(conn, databases, file, how)
+  run_jobs({ { conn = conn, databases = databases, file = file, how = how } })
 end
 
 ---@param opts table аргументы команды: [1] — имя подключения, [2] — база;
@@ -159,6 +200,74 @@ function M.deploy(opts)
   }, run)
 end
 
+---Записывает файл, если он открыт в изменённом буфере: sqlcmd читает диск, и без
+---этого выложилась бы прошлая версия — молча и незаметно. Буфер ищем перебором, а не
+---через bufnr(): тот матчит имя как шаблон и на коротком пути найдёт не тот буфер.
+---@return string? errmsg
+local function save_if_modified(file)
+  local want = vim.fs.normalize(file):lower()
+  for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+    if vim.bo[buf].modified and vim.fs.normalize(vim.api.nvim_buf_get_name(buf)):lower() == want then
+      local ok, err = pcall(vim.api.nvim_buf_call, buf, function()
+        vim.cmd.write()
+      end)
+      if not ok then
+        return "не сохранился буфер: " .. tostring(err)
+      end
+    end
+  end
+end
+
+---Выложить сразу несколько файлов: :SqlDeployFiles или <leader>dd по выделенным (Tab)
+---записям в пикере/explorer (см. lua/plugins/snacks.lua).
+---
+---Подключение и базы считаются по правилам, без вопросов: спрашивать по разу на файл
+---значило бы цепочку vim.ui.select посреди выкладки, а пачку берут почти всегда из
+---одного репозитория, где правила однозначны. Если цель не сошлась хоть для одного
+---файла — не выкладываем ничего: выложить половину пачки хуже, чем не начать.
+---@param files string[]
+function M.deploy_files(files)
+  if not sql.ensure("SqlDeploy") then
+    return
+  end
+  local jobs, skipped, bad = {}, {}, {}
+  for _, file in ipairs(files) do
+    local name = vim.fn.fnamemodify(file, ":t")
+    if vim.fn.isdirectory(file) == 1 or name:lower():sub(-4) ~= ".sql" then
+      skipped[#skipped + 1] = name
+    else
+      local err = save_if_modified(file)
+      local list = sql.connections(file)
+      local conn = (not err and #list > 0) and target.resolve_connection(file, list) or nil
+      local dbs, how = {}, nil
+      if conn then
+        dbs, how = target.resolve_databases(file, conn, list)
+      end
+      if err then
+        bad[#bad + 1] = name .. ": " .. err
+      elseif #list == 0 then
+        bad[#bad + 1] = name .. ": не найдено подключений DB_UI_* в .env проекта"
+      elseif not conn then
+        bad[#bad + 1] = name .. ": не определилось подключение"
+      elseif #dbs == 0 then
+        bad[#bad + 1] = name .. ": не определилась база" .. (how and (" (" .. how .. ")") or "")
+      else
+        jobs[#jobs + 1] = { conn = conn, databases = dbs, file = file, how = how }
+      end
+    end
+  end
+  if #skipped > 0 then
+    notify("не .sql, пропущено: " .. table.concat(skipped, ", "), vim.log.levels.WARN)
+  end
+  if #bad > 0 then
+    return notify("ничего не выложено:\n" .. table.concat(bad, "\n"), vim.log.levels.ERROR)
+  end
+  if #jobs == 0 then
+    return notify("нечего выкладывать", vim.log.levels.WARN)
+  end
+  run_jobs(jobs)
+end
+
 function M.setup()
   -- Клавиши глобальные, а не буферные: группа <leader>d у LazyVim отдана debug, но
   -- extra с dap не подключён, и держать SQL-клавиши только в sql-буферах значило, что
@@ -182,6 +291,16 @@ function M.setup()
         return n:find(lead, 1, true) == 1
       end, names)
     end,
+  })
+
+  vim.api.nvim_create_user_command("SqlDeployFiles", function(opts)
+    M.deploy_files(vim.tbl_map(function(f)
+      return vim.fn.fnamemodify(f, ":p")
+    end, opts.fargs))
+  end, {
+    nargs = "+",
+    complete = "file",
+    desc = "Выложить несколько .sql файлов через sqlcmd (цели — по правилам, без вопросов)",
   })
 end
 
