@@ -13,6 +13,8 @@
 --                  объект выглядит на другом сервере
 --   <leader>dr   — первые строки таблицы/вьюхи
 --   <leader>de   — значения enum по tvID под курсором
+--   <leader>du   — где в базах файла используется имя под курсором или выделенный
+--                  текст, вместо сниппета fit (<leader>dU — выбрав подключение)
 --   gf           — открыть файл этого объекта в репозитории (:SqlFile), в отличие
 --                  от K, который показывает то, что реально лежит в базе
 --   q            — закрыть окно с ответом
@@ -123,6 +125,20 @@ else select * from usEnumTypeValues t
   order by iif(tvID = %s, 1, 0) desc, tvID asc;');
 ]==]
 
+-- Где встречается текст: в коде процедур/функций/вьюх/триггеров всех баз файла сразу,
+-- одним union all — в отличие от lookup, который останавливается на первой базе, где
+-- нашлось: использования ищут как раз во всех. collate нужен из-за union: у баз бывают
+-- разные коллации, и без него сервер отказывается склеивать колонки.
+local USAGE = [==[
+select [db] = N'%s' collate database_default,
+  [object] = s.name + N'.' + o.name collate database_default,
+  [type] = lower(o.type_desc) collate database_default
+from [%s].sys.sql_modules sm
+join [%s].sys.objects o on o.object_id = sm.object_id
+join [%s].sys.schemas s on s.schema_id = o.schema_id
+where sm.definition like N'%%%s%%'
+  and o.name <> N'%s']==]
+
 ---Слово под курсором вместе с точками и скобками: dbo.usBases, [icsMaster].[dbo].[x].
 ---@return string? name, integer? col колонка, с которой слово начинается
 local function object_under_cursor()
@@ -148,8 +164,8 @@ local function object_under_cursor()
   return name, s
 end
 
----Выделенный текст, если команда вызвана из визуального режима.
-local function selected_text()
+---Строки выделения как есть, если команда вызвана из визуального режима.
+local function selected_lines()
   local mode = vim.fn.mode()
   if not mode:match("^[vV\22]") then
     return nil
@@ -157,6 +173,15 @@ local function selected_text()
   local ok, lines = pcall(vim.fn.getregion, vim.fn.getpos("v"), vim.fn.getpos("."), { type = mode })
   vim.api.nvim_input("<esc>") -- выделение больше не нужно; feedkeys тут вешает nvim намертво
   if not ok or not lines or #lines == 0 then
+    return nil
+  end
+  return lines
+end
+
+---Выделенное имя объекта, если команда вызвана из визуального режима.
+local function selected_text()
+  local lines = selected_lines()
+  if not lines then
     return nil
   end
   -- из "dbo.usBases u" берём только имя: выделяют обычно вместе с алиасом
@@ -379,6 +404,77 @@ function M.enum(opts)
   end)
 end
 
+---:SqlUsages — где в базе используется процедура, таблица, номер сообщения или любой
+---кусок текста (как сниппет fit, только без черновика и копирования).
+---Под курсором берётся само имя без базы и схемы: в коде его пишут и как dbo.x, и как
+---[x], и просто x. Выделение ищется как есть — это может быть и текст сообщения.
+function M.usages(opts)
+  local text
+  if opts.args ~= "" then
+    text = opts.args
+  else
+    local lines = selected_lines()
+    if lines then
+      -- переводы строк в коде бывают и CRLF, и LF — через границу строки ищем по %
+      text = table.concat(vim.tbl_map(vim.trim, lines), "%")
+    else
+      local name = object_under_cursor()
+      text = name and name:gsub("[%[%]]", ""):match("[^.]+$")
+    end
+  end
+  if not text or vim.trim(text) == "" then
+    return notify("не понял, что искать", vim.log.levels.ERROR)
+  end
+  -- _ и [ в like — метасимволы, а подчёркивание есть почти в каждом имени процедуры.
+  -- % из многострочного выделения оставляем: он там и нужен как «что угодно»
+  local quoted = text:gsub("'", "''")
+  local pattern = quoted:gsub("%[", "[[]"):gsub("_", "[_]")
+  pick(opts.bang, function(conn, dbs, file)
+    local parts = {}
+    for _, db in ipairs(dbs) do
+      local b = db:gsub("%]", "]]")
+      -- сам искомый объект в списке не нужен: его имя в собственном create procedure
+      -- находится всегда, а спрашивают, кто его вызывает
+      parts[#parts + 1] = USAGE:format((db:gsub("'", "''")), b, b, b, pattern, quoted)
+    end
+    -- через файл, а не -Q: выделенный текст сообщения бывает кириллическим, а
+    -- командная строка приезжает в sqlcmd в ANSI
+    local input = vim.fn.tempname() .. ".sql"
+    local query = "set nocount on;\n" .. table.concat(parts, "\nunion all\n") .. "\norder by 1, 2;"
+    vim.fn.writefile(vim.split(query, "\n"), input)
+    local title = "usages of " .. text
+    local where = table.concat(dbs, ",")
+    local done = sql.progress(("ищу %s в %s/%s…"):format(text, conn.name, where), "SqlObject")
+    local args = sql.args({ input = input, width = 8000, trunc = 128 })
+    local started = sql.sqlcmd(conn, dbs[1], args, function(code, out, cancelled)
+      vim.schedule(function()
+        done()
+        os.remove(input)
+        if cancelled then
+          return
+        end
+        if code ~= 0 then
+          notify(title .. " @ " .. conn.name .. ": sqlcmd вернул " .. code, vim.log.levels.ERROR)
+        end
+        sqlwin.show({
+          kind = "usages",
+          title = ("%s @ %s/%s"):format(title, conn.name, where),
+          text = out,
+          -- K на имени из списка спросит первую базу — объекты из остальных баз
+          -- смотреть через :SqlDef база.dbo.имя
+          ctx = { file = file, conn = conn.name, db = dbs[1] },
+          filetype = "",
+          bottom = true,
+        })
+      end)
+    end)
+    if not started then
+      done() -- процесс не запустился, ответа не будет — гасим сами
+      os.remove(input)
+    end
+  end)
+end
+
 ---:SqlFile (gf) — открыть файл объекта под курсором прямо из репозитория.
 ---Объекты лежат по одному в файле <имя>_PRC|TAB|VIW|TRG|FNC|FK.sql, поэтому имени
 ---хватает, чтобы найти файл точным glob'ом: одно совпадение открывается сразу, без
@@ -481,6 +577,18 @@ function M.setup()
   -- это и в чужом файле — например, на имени процедуры в логе или в коде на другом языке.
   vim.keymap.set({ "n", "x" }, "<leader>dr", "<cmd>SqlRows<cr>", { desc = "Первые строки таблицы" })
   vim.keymap.set({ "n", "x" }, "<leader>de", "<cmd>SqlEnum<cr>", { desc = "Значения enum по tvID" })
+  vim.keymap.set(
+    { "n", "x" },
+    "<leader>du",
+    "<cmd>SqlUsages<cr>",
+    { desc = "Где используется в базе" }
+  )
+  vim.keymap.set(
+    { "n", "x" },
+    "<leader>dU",
+    "<cmd>SqlUsages!<cr>",
+    { desc = "Где используется, выбрав подключение" }
+  )
 
   local function command(name, fn, desc, count)
     vim.api.nvim_create_user_command(name, fn, { nargs = "?", bang = true, count = count, desc = desc })
@@ -497,6 +605,11 @@ function M.setup()
     0
   )
   command("SqlEnum", M.enum, "Показать значения enum по tvID")
+  command(
+    "SqlUsages",
+    M.usages,
+    "Где в коде объектов баз встречается текст (! — выбрать подключение)"
+  )
   command(
     "SqlFile",
     M.file,
