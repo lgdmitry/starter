@@ -490,9 +490,14 @@ function M.file(opts)
   if not object then
     return notify("не понял, какой файл искать: " .. name, vim.log.levels.ERROR)
   end
-  -- у безымянного буфера (черновик запроса, окно с ответом) репозитория нет — ищем
-  -- от текущего каталога, как это делает Find Files
-  local file = vim.api.nvim_buf_get_name(0)
+  -- у безымянного буфера (черновик запроса, окно с ответом) репозитория нет — берём
+  -- файл, откуда он пришёл (b:sqlctx), а без него ищем от текущего каталога, как это
+  -- делает Find Files
+  local ctx = vim.b.sqlctx
+  local file = (ctx and ctx.file) or vim.api.nvim_buf_get_name(0)
+  if file:match("^sql://") then
+    file = ""
+  end
   local root = vim.fs.normalize((file ~= "" and vim.fs.root(file, ".git")) or vim.fn.getcwd())
   local glob = object .. "_*.sql"
   -- fd берём тот же, что и пикер: там он уже найден и проверен
@@ -502,12 +507,19 @@ function M.file(opts)
   end
   vim.list_extend(args, { "--ignore-case", "--glob", glob, root })
   table.insert(args, 1, cmd)
+  -- запоминаем сразу: пока fd ищет, курсор может уйти в другое окно
+  local from = vim.b.sqlwin and vim.b.sqlwin.from
   -- асинхронно: по холодному кэшу fd бегает по репозиторию до секунды, а клавиша
   -- нажимается посреди чтения кода
   vim.system(args, { text = true }, function(res)
     local files = vim.split((res.stdout or ""):gsub("\r", ""), "\n", { trimempty = true })
     vim.schedule(function()
       if #files == 1 and not opts.bang then
+        -- из окна ответа файл открывается в окне, откуда пришёл ответ, а не поверх
+        -- ответа: пикер (ниже) поступает так же — окна nofile он для файлов не берёт
+        if from and vim.api.nvim_win_is_valid(from) then
+          vim.api.nvim_set_current_win(from)
+        end
         return vim.cmd.edit(vim.fn.fnameescape(files[1]))
       end
       -- нашлось несколько (_TAB и _VIW, копия в соседней базе) — выбрать из них;
@@ -527,7 +539,8 @@ function M.file(opts)
   end)
 end
 
----K и gK — общие для sql-буферов и окон с ответом (их ставит config.sqlwin).
+---K, gK и gf — общие для sql-буферов и окон с ответом (их ставит config.sqlwin: там
+---filetype бывает и пустой, так что по FileType они бы туда не попали).
 function M.map_def_keys(buf)
   vim.keymap.set({ "n", "x" }, "K", "<cmd>SqlDef<cr>", { buffer = buf, desc = "Код объекта в базе" })
   vim.keymap.set(
@@ -536,6 +549,14 @@ function M.map_def_keys(buf)
     "<cmd>SqlDef!<cr>",
     { buffer = buf, desc = "Код объекта на другом сервере" }
   )
+  -- gf только здесь, а не глобально: в остальных буферах это встроенный переход по пути,
+  -- а в .sql путей не бывает — зато бывают имена объектов, у каждого свой файл
+  vim.keymap.set(
+    { "n", "x" },
+    "gf",
+    "<cmd>SqlFile<cr>",
+    { buffer = buf, desc = "Файл объекта в репозитории" }
+  )
 end
 
 function M.setup()
@@ -543,23 +564,12 @@ function M.setup()
   -- filetype sql в спеке nvim-lspconfig (см. lua/plugins/dadbod.lua). Глобальным K
   -- быть не может — везде, кроме sql, это hover от LSP. В окнах с ответом его вешает
   -- config.sqlwin: там filetype бывает и пустой.
-  local function map_key(buf)
-    M.map_def_keys(buf)
-    -- gf только в sql-буферах: в остальных это встроенный переход по пути под курсором,
-    -- а в .sql путей не бывает — зато бывают имена объектов, у каждого свой файл
-    vim.keymap.set(
-      { "n", "x" },
-      "gf",
-      "<cmd>SqlFile<cr>",
-      { buffer = buf, desc = "Файл объекта в репозитории" }
-    )
-  end
   vim.api.nvim_create_autocmd("FileType", {
     group = vim.api.nvim_create_augroup("sqlobject_keys", { clear = true }),
     pattern = "sql",
     desc = "Клавиши просмотра объектов в sql-буферах",
     callback = function(ev)
-      map_key(ev.buf)
+      M.map_def_keys(ev.buf)
     end,
   })
   -- Автокоманды мало: buffer-local маппинг ставится только на будущие sql-буферы, а
@@ -568,7 +578,7 @@ function M.setup()
   -- Snacks.keymap с ft-маппингами: заводит их и в уже загруженных буферах.
   for _, buf in ipairs(vim.api.nvim_list_bufs()) do
     if vim.api.nvim_buf_is_loaded(buf) and vim.bo[buf].filetype == "sql" then
-      map_key(buf)
+      M.map_def_keys(buf)
     end
   end
 
