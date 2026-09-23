@@ -9,6 +9,8 @@
 --   K            — код объекта под курсором или выделенного, а на числе — текст
 --                  сообщения с этим номером (в RAISERROR(60003, ...) и THROW) либо
 --                  значения enum с таким tvID (в любом другом месте)
+--   gK           — то же, но подключение спрашивается (:SqlDef!): посмотреть, как
+--                  объект выглядит на другом сервере
 --   <leader>dr   — первые строки таблицы/вьюхи
 --   <leader>de   — значения enum по tvID под курсором
 --   gf           — открыть файл этого объекта в репозитории (:SqlFile), в отличие
@@ -429,13 +431,24 @@ function M.file(opts)
   end)
 end
 
+---K и gK — общие для sql-буферов и окон с ответом (их ставит config.sqlwin).
+function M.map_def_keys(buf)
+  vim.keymap.set({ "n", "x" }, "K", "<cmd>SqlDef<cr>", { buffer = buf, desc = "Код объекта в базе" })
+  vim.keymap.set(
+    { "n", "x" },
+    "gK",
+    "<cmd>SqlDef!<cr>",
+    { buffer = buf, desc = "Код объекта на другом сервере" }
+  )
+end
+
 function M.setup()
   -- K в sql-буферах не перебивается hover-маппингом LazyVim: тот отключён для
   -- filetype sql в спеке nvim-lspconfig (см. lua/plugins/dadbod.lua). Глобальным K
   -- быть не может — везде, кроме sql, это hover от LSP. В окнах с ответом его вешает
   -- config.sqlwin: там filetype бывает и пустой.
   local function map_key(buf)
-    vim.keymap.set({ "n", "x" }, "K", "<cmd>SqlDef<cr>", { buffer = buf, desc = "Код объекта в базе" })
+    M.map_def_keys(buf)
     -- gf только в sql-буферах: в остальных это встроенный переход по пути под курсором,
     -- а в .sql путей не бывает — зато бывают имена объектов, у каждого свой файл
     vim.keymap.set(

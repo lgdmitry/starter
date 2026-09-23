@@ -39,6 +39,7 @@ return {
   -- то есть всегда последним. Поэтому переопределяем саму запись:
   --   has = "hover" — ставить K только если клиент реально умеет hover;
   --   enabled       — в sql-буферах K всегда наш, :SqlDef (см. config.sqlobject).
+  -- То же с gK (signature help): в sql-буферах это :SqlDef! — объект на другом сервере.
   {
     "neovim/nvim-lspconfig",
     opts = {
@@ -52,6 +53,17 @@ return {
               end,
               desc = "Hover",
               has = "hover",
+              enabled = function(buf)
+                return vim.bo[buf].filetype ~= "sql"
+              end,
+            },
+            {
+              "gK",
+              function()
+                return vim.lsp.buf.signature_help()
+              end,
+              desc = "Signature Help",
+              has = "signatureHelp",
               enabled = function(buf)
                 return vim.bo[buf].filetype ~= "sql"
               end,

@@ -30,9 +30,10 @@ local function window_of(slot)
 end
 
 ---Клавиши окна ответа: q — закрыть и вернуться туда, откуда пришли; K — посмотреть
----объект под курсором, уже в подключении и базе этого окна (b:sqlctx).
+---объект под курсором, уже в подключении и базе этого окна (b:sqlctx), gK — на
+---другом сервере.
 local function keys(buf)
-  vim.keymap.set({ "n", "x" }, "K", "<cmd>SqlDef<cr>", { buffer = buf, desc = "Код объекта в базе" })
+  require("config.sqlobject").map_def_keys(buf)
   vim.keymap.set("n", "q", function()
     local from = (vim.b[buf].sqlwin or {}).from
     vim.cmd("close")
