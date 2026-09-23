@@ -19,18 +19,23 @@ local function session_for_cwd(persistence)
   end
 end
 
----Буфер, который был текущим на момент :mksession, восстанавливается первым
----в цепочке nested-автокоманд — раньше, чем lazy.nvim успевает догрузить
----nvim-treesitter по BufReadPost/FileType, поэтому именно он остаётся без
----подсветки (остальные буферы сессии успевают её получить). :e лечит вручную —
----перечитывает файл с диска и заново прогоняет BufReadPost/FileType, когда
----treesitter уже точно загружен; делаем то же самое кодом.
-local function reload_current_buffer()
-  vim.schedule(function()
-    if vim.bo.buftype == "" and vim.api.nvim_buf_get_name(0) ~= "" then
-      vim.cmd("edit")
+---Буфер, который был текущим на момент :mksession, сессия открывает через :edit
+---внутри VimEnter — и он остаётся с пустым 'filetype', а значит без treesitter и
+---синтаксиса. filetypedetect ставит тип через :setf, а тот молчит, если
+---did_filetype() уже истинно; флаг живёт всю цепочку автокоманд, и в ней FileType
+---уже успевает прозвучать раньше детектора (lazy.nvim при подгрузке плагинов
+---на BufRead* переигрывает события). :e это лечил, но перечитывал файл с диска и
+---прогонял все BufRead* заново. Присваивание 'filetype' did_filetype() не
+---проверяет и запускает FileType как положено — этого достаточно.
+local function detect_filetypes()
+  for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+    if vim.api.nvim_buf_is_loaded(buf) and vim.bo[buf].buftype == "" and vim.bo[buf].filetype == "" then
+      local ft = vim.filetype.match({ buf = buf })
+      if ft then
+        vim.bo[buf].filetype = ft
+      end
     end
-  end)
+  end
 end
 
 ---Профиль alacritty для быстрого запуска nvim (profiles/neovim.toml) всегда
@@ -49,7 +54,7 @@ function M.restore()
   if not force_last() then
     if session_for_cwd(persistence) then
       persistence.load()
-      reload_current_buffer()
+      detect_filetypes()
       return true
     end
     return false
@@ -57,7 +62,7 @@ function M.restore()
   local last = persistence.last()
   if last and vim.fn.filereadable(last) == 1 then
     persistence.load({ last = true })
-    reload_current_buffer()
+    detect_filetypes()
     return true
   end
   return false
