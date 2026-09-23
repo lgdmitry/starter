@@ -14,11 +14,14 @@
 
 -- Свои команды поверх dadbod. Общее лежит в трёх модулях: config.sqlconn (как звать
 -- sqlcmd), config.sqltarget (куда идти для этого файла), config.sqlwin (окна с ответом):
---   :SqlDeploy (<leader>dd в sql-буферах) — выложить текущий .sql файл в базу
---   :SqlDef (K), :SqlRows (<leader>dr), :SqlEnum (<leader>de) — посмотреть объект в базе
+--   :SqlDeploy (<leader>dd), :SqlDeployFiles — выложить .sql файл(ы) в базу
+--   :SqlDef (K, gK), :SqlRows (<leader>dr), :SqlEnum (<leader>de) — объект в базе
+--   :SqlUsages (<leader>du) — где в базах используется имя; :SqlFile (gf) — файл объекта
 --   :SqlQuery (<leader>dq), :SqlRun (<leader>dx) — разовый запрос рядом с процедурой
+--   :SqlWhere (<leader>di), :SqlCacheClear — куда пойдут команды, забыть кэши правил
 --   :SqlCancel (<leader>dc) — прервать выполняющийся sqlcmd (запросы асинхронные)
 --   config.sqlcomplete — b:db для дополнения из базы в обычных .sql файлах
+-- Спеки — tests/sql/, запуск описан в tests/run.lua.
 require("config.sqlconn").setup()
 require("config.sqltarget").setup()
 require("config.sqldeploy").setup()

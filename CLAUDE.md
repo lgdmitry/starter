@@ -49,6 +49,15 @@ Two things that will waste time otherwise:
   `lazy-lock.json`. Check `git status` afterwards and don't fold that into an
   unrelated commit.
 
+The SQL layer has specs in `tests/sql/` (own tiny runner, no plugins, fake
+server and repo from `tests/fixtures.lua`). Run them after any change to
+`lua/config/sql*.lua`; `-u NONE` keeps lazy from touching `lazy-lock.json`:
+
+```bash
+"/c/Program Files/Neovim/bin/nvim.exe" --headless -u NONE \
+  -l C:/Users/pesotskiydmi/AppData/Local/nvim/tests/run.lua [filter]
+```
+
 SQL can be verified for real before shipping it: MCP servers `mssqlclient-*`
 (esql/dgsql/crocus dev) execute queries directly. Use them for anything going
 into `lua/config/sql*.lua` — e.g. `string_agg`'s separator must be a literal
