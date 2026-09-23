@@ -98,6 +98,7 @@ local function pick(bang, cb)
     bang = bang,
     prompt = "Запрос к:",
     title = "SqlQuery",
+    url_fallback = true,
   }, function(conn, dbs, file)
     cb(conn, dbs[1], file)
   end)

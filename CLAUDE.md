@@ -67,7 +67,12 @@ Not a plugin — own code on top of vim-dadbod, wired up from
   `:SqlCancel` (`<leader>dc`) kills a running one.
 - `lua/config/sqltarget.lua` — *where* to go for a given file: which
   connection and which databases (see below). `:SqlCacheClear` forgets what
-  it cached.
+  it cached. `:SqlWhere` (`<leader>di`) shows the resolved target; the
+  lualine component (from `lua/plugins/dadbod.lua`) shows it only once known
+  (`b:sqltarget`), because resolving queries the server synchronously.
+  Viewing commands (`url_fallback`) also look in the connection's own URL
+  database — first when the connection was picked by hand (`gK`), last
+  otherwise; deploy stays strict.
 - `lua/config/sqlwin.lua` — the result windows: one vertical split for object
   code, one bottom split for everything read as output; the next answer
   reuses the window. `b:sqlctx` in them keeps file/conn/db, so `K`,

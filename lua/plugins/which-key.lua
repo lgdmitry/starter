@@ -31,6 +31,7 @@ return {
       { "<leader>du", icon = icon("󰍉", "green") },
       { "<leader>dU", icon = icon("󰍉", "green") },
       { "<leader>dc", icon = icon("󰓛", "red") },
+      { "<leader>di", icon = icon("󰋼", "cyan") },
       { "gK", icon = icon("󰅩", "azure") },
       { "gf", icon = icon("󰈮", "cyan") },
 

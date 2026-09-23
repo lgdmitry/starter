@@ -33,8 +33,8 @@ local function resolve(file)
   end
   -- сторож может дать несколько баз (datagroup + ics_ua97) — схема у них общая,
   -- для подсказок хватит первой
-  local dbs = target.resolve_databases(file, conn, list)
-  return dbs[1] and sql.with_database(conn.url, dbs[1])
+  local dbs, how = target.resolve_databases(file, conn, list)
+  return dbs[1] and sql.with_database(conn.url, dbs[1]), conn, dbs, how
 end
 
 local function attach(buf)
@@ -48,11 +48,13 @@ local function attach(buf)
   if vim.bo[buf].buftype ~= "" or file == "" then
     return
   end
-  local ok, url = pcall(resolve, file)
+  local ok, url, conn, dbs, how = pcall(resolve, file)
   if not ok or not url then
     return
   end
   vim.b[buf].db = url
+  -- правила уже отработали — пусть статус покажет, куда они привели
+  target.remember(buf, conn, dbs, how)
   -- список таблиц — сейчас, а не на первой букве (см. выше)
   pcall(vim.fn["vim_dadbod_completion#fetch"], buf)
 end

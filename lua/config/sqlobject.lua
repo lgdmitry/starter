@@ -250,6 +250,7 @@ local function pick(bang, cb)
     bang = bang,
     prompt = "Смотреть в:",
     title = "SqlObject",
+    url_fallback = true,
   }, cb)
 end
 

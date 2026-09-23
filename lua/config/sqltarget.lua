@@ -2,7 +2,8 @@
 --
 -- Сервер и базы — по правилам репозитория из .claude/repo-conventions.json, тем же, по
 -- которым выкладывает скилл deploy-commit (x:/Git/Dev/ClaudeSkillsMarketplace):
---   сервер — environment верхней папки пути (Crocus -> crocus), иначе
+--   сервер — environment верхней папки пути (Crocus -> crocus), иначе environment
+--            своего правила PATH_RULES (ServiceControle -> crocus), иначе
 --            defaultServerEnvironment; адрес из .mcp.environments.json, а
 --            логин/пароль — из подключения DB_UI_* с таким же хостом;
 --   базы   — из «сторожа» самого файла, если он там есть (usBases ... OptionsDB & 0x…
@@ -157,6 +158,12 @@ end
 -- В databases перечислены варианты одной и той же базы для разных репозиториев:
 -- берётся тот, который есть на целевом сервере (bk — это datagroup в dgsql и
 -- icsZao в esql; серверы у них разные, так что двусмысленности нет).
+-- Префиксы — в нижнем регистре: repo_path приводит к нему путь, и «Files/» не совпал
+-- бы ни с чем. Имена баз — как угодно, их сверяют без учёта регистра.
+-- environment — сервер для папки, которой нет в topFolderMasks repo-conventions.json
+-- (там только Crocus и icsMaster): иначе файл ушёл бы на defaultServerEnvironment, где
+-- его базы нет. Работает, только если такое окружение есть в .mcp.environments.json
+-- репозитория, — в esql crocus нет, и там остаётся честное «базы нет».
 local PATH_RULES = {
   { prefix = "crocus/", databases = { "Crocus" } },
   { prefix = "bk/", databases = { "datagroup", "icsZao" } },
@@ -164,7 +171,23 @@ local PATH_RULES = {
   { prefix = "ics_ua97/support/", databases = { "DEV_NEW" } },
   { prefix = "ics_ua97/", databases = { "ics_ua97" } },
   { prefix = "icsmaster/", databases = { "icsMaster" } },
+  -- модуль Crocus (cc*): база ServiceControle есть только на crocus-сервере
+  { prefix = "servicecontrole/", databases = { "ServiceControle" }, environment = "crocus" },
+  { prefix = "files/", databases = { "icsFiles" } },
 }
+
+---Первое подходящее файлу правило PATH_RULES.
+local function path_rule(file)
+  local rel = repo_path(file)
+  if not rel then
+    return nil
+  end
+  for _, rule in ipairs(PATH_RULES) do
+    if rel:sub(1, #rule.prefix) == rule.prefix then
+      return rule
+    end
+  end
+end
 
 ---База по правилам PATH_RULES.
 ---@return string|false|nil database nil — правило не подошло, решают следующие;
@@ -172,26 +195,22 @@ local PATH_RULES = {
 ---запасное правило увело бы файл в базу из URL, то есть выложило бы не туда
 ---@return string? how
 local function database_by_rules(file, conn)
-  local rel = repo_path(file)
-  if not rel then
+  local rule = path_rule(file)
+  if not rule then
     return nil
   end
-  for _, rule in ipairs(PATH_RULES) do
-    if rel:sub(1, #rule.prefix) == rule.prefix then
-      for _, name in ipairs(rule.databases) do
-        local exact = server_databases(conn)[name:lower()]
-        if exact then
-          return exact, "по пути " .. rule.prefix .. "**"
-        end
-      end
-      return false,
-        ("для %s** нужна база %s, а на %s её нет"):format(
-          rule.prefix,
-          table.concat(rule.databases, " или "),
-          conn.name
-        )
+  for _, name in ipairs(rule.databases) do
+    local exact = server_databases(conn)[name:lower()]
+    if exact then
+      return exact, "по пути " .. rule.prefix .. "**"
     end
   end
+  return false,
+    ("для %s** нужна база %s, а на %s её нет"):format(
+      rule.prefix,
+      table.concat(rule.databases, " или "),
+      conn.name
+    )
 end
 
 ---Запасное правило: первая папка пути, если такая база есть на сервере, иначе база из URL.
@@ -258,12 +277,18 @@ function M.resolve_connection(file, list)
   local conv = conventions(root)
   if conv then
     local rules = folder_rules(conv, first)
-    local conn = connection_for_server(
-      list,
-      env_server(root, conv, (rules and rules.environment) or conv.defaultServerEnvironment)
-    )
-    if conn then
-      return conn
+    local by_path = path_rule(file)
+    -- по очереди: правило репозитория, своё правило по пути, окружение по умолчанию;
+    -- окружения из PATH_RULES в этом репозитории может не быть — тогда дальше
+    for _, env in ipairs({
+      (rules and rules.environment) or false,
+      (by_path and by_path.environment) or false,
+      conv.defaultServerEnvironment or false,
+    }) do
+      local conn = env and connection_for_server(list, env_server(root, conv, env))
+      if conn then
+        return conn
+      end
     end
   end
   return connection_by_name(file, list)
@@ -304,6 +329,40 @@ function M.resolve_databases(file, conn, list)
   return db and { db } or {}, how
 end
 
+---Запомнить в b:sqltarget, куда правила ведут этот буфер, — для строки статуса.
+function M.remember(buf, conn, dbs, how)
+  vim.b[buf].sqltarget = { conn = conn.name, host = (sql.url_parts(conn.url)), dbs = dbs, how = how }
+end
+
+---Текст для строки статуса: «подключение@сервер · базы» или "".
+---
+---Сам статус ничего не вычисляет: правила ходят на сервер синхронно (список баз, реестр
+---usBases), и платить за это на каждой перерисовке или на каждом открытом ради чтения
+---файле нельзя. Поэтому показывается только уже известное — b:sqltarget ставят
+---config.sqlcomplete (на первом InsertEnter), любая команда слоя (через pick) и
+---:SqlWhere. Исключение — окна ответа и черновик: у них b:sqlctx, и там нужен только
+---хост подключения из .env, это дёшево.
+function M.statusline()
+  local ctx = vim.b.sqlctx
+  local t = vim.b.sqltarget
+  if ctx and ctx.conn then
+    -- черновик живёт долго, ключ — на случай, если контекст в нём сменят
+    local key = ctx.conn .. "/" .. (ctx.db or "")
+    if not t or t.key ~= key then
+      local ok, conn = pcall(function()
+        return sql.by_name(sql.connections(ctx.file or ""), ctx.conn)
+      end)
+      t = { key = key, conn = ctx.conn, host = ok and conn and (sql.url_parts(conn.url)) or "", dbs = { ctx.db } }
+      vim.b.sqltarget = t
+    end
+  end
+  if not t then
+    return ""
+  end
+  local dbs = #t.dbs > 0 and table.concat(t.dbs, ",") or "?"
+  return ("%s@%s · %s"):format(t.conn, t.host ~= "" and t.host or "?", dbs)
+end
+
 ---Подключение и базы для файла: сначала по правилам, а если однозначно не выходит —
 ---спрашиваем. Форма одна на все команды, поэтому всё различие вынесено в opts.
 ---@param opts table
@@ -315,6 +374,9 @@ end
 ---  database — база названа явно, аргументом команды
 ---  prompt   — заголовок списка подключений
 ---  hint     — что дописать к ошибке «не определена база»
+---  url_fallback — дописать в конец базу из URL подключения (а если правила базы не
+---             дали — взять только её); для просмотра (K, gK, запрос), но не для
+---             выкладки: там это значило бы «не туда»
 ---  title    — заголовок уведомлений
 ---@param cb fun(conn: table, databases: string[], file: string, how: string?)
 function M.pick(opts, cb)
@@ -339,11 +401,48 @@ function M.pick(opts, cb)
     else
       dbs, how = M.resolve_databases(file, conn, list)
     end
+    -- для статуса — то, что дали правила, без базы из URL: статус показывает, куда
+    -- уедет файл, а не где ещё поищут объект
+    local rule_dbs, rule_how = dbs, how
+    local fallback = false
+    local url_db = select(2, sql.url_parts(conn.url))
+    if opts.url_fallback and not opts.database and url_db ~= "" then
+      -- правила знают, куда файл выкладывать, а не где смотреть. gK на файле из
+      -- ics_ua97/** с crocus_dev упирался в «нужна база ics_ua97», а на файле из
+      -- ServiceControle/** искал только в ServiceControle, хотя объект мог быть и в
+      -- Crocus. Поэтому база подключения тоже в списке, а место её зависит от того, кто
+      -- выбрал подключение. lookup останавливается на первой базе, где объект нашёлся, и
+      -- порядок решает: ccCommands — таблица в ServiceControle и вьюха в Crocus.
+      --   выбрали руками (gK) — сначала она: crocus_dev и значит «смотреть в Crocus»;
+      --   по правилам (K)     — в конце: сначала базы файла, она — если там пусто
+      local rest = vim.tbl_filter(function(db)
+        return db:lower() ~= url_db:lower()
+      end, dbs)
+      if opts.bang then
+        dbs = vim.list_extend({ url_db }, rest)
+        how = "база подключения" .. (#rest > 0 and (", потом " .. (how or "")) or "")
+      elseif #rest == #dbs then
+        fallback = #dbs == 0
+        dbs = vim.list_extend(rest, { url_db })
+        how = fallback and ("база из URL, " .. (how or "правила базы не дали"))
+          or (how .. ", потом база из URL")
+      end
+    end
     if #dbs == 0 then
       return notify(
         "не определена база" .. (how and (": " .. how) or "") .. (opts.hint or ""),
         vim.log.levels.ERROR
       )
+    end
+    -- в статус — только то, что дали правила: подключение, выбранное руками (!) или
+    -- названное аргументом, следующая команда без ! уже не повторит
+    -- (и не запасная база из URL: выкладка туда не пойдёт)
+    if
+      not (ctx or opts.bang or opts.name or opts.database or fallback)
+      and file ~= ""
+      and vim.api.nvim_buf_get_name(0) == file
+    then
+      M.remember(0, conn, rule_dbs, rule_how)
     end
     cb(conn, dbs, file, how)
   end
@@ -374,8 +473,32 @@ function M.setup()
   -- завели или поправили правила, перезапускать nvim ради этого не надо.
   vim.api.nvim_create_user_command("SqlCacheClear", function()
     db_cache, mask_cache, json_cache = {}, {}, {}
+    -- иначе статус продолжал бы показывать то, что вышло по старым правилам
+    for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+      if vim.b[buf].sqltarget and not vim.b[buf].sqlctx then
+        vim.b[buf].sqltarget = nil
+      end
+    end
     sql.notify("кэш баз и правил сброшен")
   end, { desc = "Забыть списки баз, реестр usBases и repo-conventions.json" })
+
+  -- То же, что покажет статус, но с объяснением, откуда взялась база; заодно заполняет
+  -- статус для файла, в котором ещё ничего не делали.
+  vim.api.nvim_create_user_command("SqlWhere", function(o)
+    M.pick({
+      file = vim.api.nvim_buf_get_name(0),
+      ctx = vim.b.sqlctx,
+      bang = o.bang,
+      title = "SqlWhere",
+    }, function(conn, dbs, _, how)
+      sql.notify(
+        ("%s (%s)\nбазы: %s\n%s"):format(conn.name, (sql.url_parts(conn.url)), table.concat(dbs, ", "), how or ""),
+        vim.log.levels.INFO,
+        "SqlWhere"
+      )
+    end)
+  end, { bang = true, desc = "Куда пойдут команды SQL для этого файла" })
+  vim.keymap.set("n", "<leader>di", "<cmd>SqlWhere<cr>", { desc = "Подключение и база файла" })
 end
 
 return M

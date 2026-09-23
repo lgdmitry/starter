@@ -33,6 +33,26 @@ return {
     -- dadbod-ui читает .env только если vim-dotenv уже загружен
     dependencies = { "tpope/vim-dotenv" },
   },
+  -- Подключение, сервер и база в строке статуса — чтобы до <leader>dd было видно, куда
+  -- уедет файл. Что именно и когда оно известно — см. sqltarget.statusline.
+  {
+    "nvim-lualine/lualine.nvim",
+    optional = true,
+    opts = function(_, opts)
+      table.insert(opts.sections.lualine_x, 1, {
+        function()
+          return require("config.sqltarget").statusline()
+        end,
+        cond = function()
+          return vim.b.sqltarget ~= nil or vim.b.sqlctx ~= nil
+        end,
+        icon = "󰆼",
+        color = function()
+          return { fg = Snacks.util.color("Special") }
+        end,
+      })
+    end,
+  },
   -- LazyVim вешает K на vim.lsp.buf.hover() в любом буфере, к которому присоединился
   -- хоть какой-нибудь LSP-клиент, и без проверки, умеет ли тот hover. В sql-буферах
   -- такой клиент есть — copilot, а hover он не поддерживает, поэтому K отвечал
