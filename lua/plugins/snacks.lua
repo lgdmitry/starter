@@ -24,24 +24,39 @@ local by_mtime = {
 -- по тем же правилам, что и :SqlDeploy для открытого файла (config.sqldeploy).
 -- Маппинг буферный и такой же, как глобальный: без него <leader>dd в окне пикера
 -- сработал бы глобальный и попробовал выложить сам буфер пикера, то есть ничего.
+-- <leader>dD — то же, но подключение спрашивается (один раз на всю пачку).
+local function deploy_action(pick)
+  return function(picker)
+    -- fallback: без выделения выкладывается запись под курсором
+    local files = vim.tbl_map(Snacks.picker.util.path, picker:selected({ fallback = true }))
+    picker.list:set_selected() -- выделение съедено действием, как в explorer_del
+    -- explorer живёт дальше (это сайдбар), разовый список — закрывается: иначе он
+    -- закроет собой окно с ответом sqlcmd (и список подключений тоже)
+    if picker.opts.source ~= "explorer" then
+      picker:close()
+    end
+    require("config.sqldeploy").deploy_files(files, { pick = pick })
+  end
+end
+
+local deploy_keys = {
+  ["<leader>dd"] = { "sql_deploy", desc = "выложить .sql (SqlDeploy)" },
+  ["<leader>dD"] = { "sql_deploy_pick", desc = "выложить .sql, выбрав подключение" },
+}
+
 local deploy = {
   actions = {
-    sql_deploy = function(picker)
-      -- fallback: без выделения выкладывается запись под курсором
-      local files = vim.tbl_map(Snacks.picker.util.path, picker:selected({ fallback = true }))
-      picker.list:set_selected() -- выделение съедено действием, как в explorer_del
-      -- explorer живёт дальше (это сайдбар), разовый список — закрывается: иначе он
-      -- закроет собой окно с ответом sqlcmd
-      if picker.opts.source ~= "explorer" then
-        picker:close()
-      end
-      require("config.sqldeploy").deploy_files(files)
-    end,
+    sql_deploy = deploy_action(false),
+    sql_deploy_pick = deploy_action(true),
   },
   win = {
-    list = { keys = { ["<leader>dd"] = { "sql_deploy", desc = "выложить .sql (SqlDeploy)" } } },
+    list = { keys = deploy_keys },
     -- в строке поиска — только в нормальном режиме: в insert <leader> это обычный символ
-    input = { keys = { ["<leader>dd"] = { "sql_deploy", desc = "выложить .sql (SqlDeploy)", mode = { "n" } } } },
+    input = {
+      keys = vim.tbl_map(function(k)
+        return vim.tbl_extend("force", k, { mode = { "n" } })
+      end, deploy_keys),
+    },
   },
 }
 

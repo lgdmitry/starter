@@ -17,7 +17,8 @@
 -- <leader>dc — прервать выкладку (:SqlCancel, см. config.sqlconn).
 --
 -- Пачкой: :SqlDeployFiles <файлы> и то же <leader>dd по выделенным (Tab) записям в
--- snacks-пикере и explorer (действие заведено в lua/plugins/snacks.lua).
+-- snacks-пикере и explorer (действие заведено в lua/plugins/snacks.lua); с выбором
+-- подключения — :SqlDeployFiles! и <leader>dD там же.
 
 local sql = require("config.sqlconn")
 local target = require("config.sqltarget")
@@ -225,47 +226,91 @@ end
 ---значило бы цепочку vim.ui.select посреди выкладки, а пачку берут почти всегда из
 ---одного репозитория, где правила однозначны. Если цель не сошлась хоть для одного
 ---файла — не выкладываем ничего: выложить половину пачки хуже, чем не начать.
+---
+---С opts.pick (:SqlDeployFiles!, <leader>dD) подключение спрашивается один раз на всю
+---пачку — как :SqlDeploy! для одного файла; базы по-прежнему считаются по правилам,
+---но уже для выбранного сервера.
 ---@param files string[]
-function M.deploy_files(files)
+---@param opts? { pick: boolean? }
+function M.deploy_files(files, opts)
+  opts = opts or {}
   if not sql.ensure("SqlDeploy") then
     return
   end
-  local jobs, skipped, bad = {}, {}, {}
+  local sqls, skipped, bad = {}, {}, {}
   for _, file in ipairs(files) do
     local name = vim.fn.fnamemodify(file, ":t")
     if vim.fn.isdirectory(file) == 1 or name:lower():sub(-4) ~= ".sql" then
       skipped[#skipped + 1] = name
     else
       local err = save_if_modified(file)
-      local list = sql.connections(file)
-      local conn = (not err and #list > 0) and target.resolve_connection(file, list) or nil
-      local dbs, how = {}, nil
-      if conn then
-        dbs, how = target.resolve_databases(file, conn, list)
-      end
       if err then
         bad[#bad + 1] = name .. ": " .. err
-      elseif #list == 0 then
-        bad[#bad + 1] = name .. ": не найдено подключений DB_UI_* в .env проекта"
-      elseif not conn then
-        bad[#bad + 1] = name .. ": не определилось подключение"
-      elseif #dbs == 0 then
-        bad[#bad + 1] = name .. ": не определилась база" .. (how and (" (" .. how .. ")") or "")
       else
-        jobs[#jobs + 1] = { conn = conn, databases = dbs, file = file, how = how }
+        sqls[#sqls + 1] = file
       end
     end
   end
   if #skipped > 0 then
     notify("не .sql, пропущено: " .. table.concat(skipped, ", "), vim.log.levels.WARN)
   end
-  if #bad > 0 then
-    return notify("ничего не выложено:\n" .. table.concat(bad, "\n"), vim.log.levels.ERROR)
+
+  ---@param chosen table? подключение, выбранное вручную; nil — по правилам
+  local function build(chosen)
+    local jobs = {}
+    for _, file in ipairs(sqls) do
+      local name = vim.fn.fnamemodify(file, ":t")
+      local list = sql.connections(file)
+      local conn
+      if #list > 0 and chosen then
+        -- выбранное ищем по имени в .env самого файла: пачка может собраться из разных
+        -- проектов, и учётка у одноимённого подключения там своя
+        conn = sql.by_name(list, chosen.name)
+      elseif #list > 0 then
+        conn = target.resolve_connection(file, list)
+      end
+      local dbs, how = {}, nil
+      if conn then
+        dbs, how = target.resolve_databases(file, conn, list)
+      end
+      if #list == 0 then
+        bad[#bad + 1] = name .. ": не найдено подключений DB_UI_* в .env проекта"
+      elseif not conn then
+        bad[#bad + 1] = name
+          .. (
+            chosen and (": нет подключения " .. chosen.name .. " в .env проекта")
+            or ": не определилось подключение"
+          )
+      elseif #dbs == 0 then
+        bad[#bad + 1] = name .. ": не определилась база" .. (how and (" (" .. how .. ")") or "")
+      else
+        jobs[#jobs + 1] = { conn = conn, databases = dbs, file = file, how = how }
+      end
+    end
+    if #bad > 0 then
+      return notify("ничего не выложено:\n" .. table.concat(bad, "\n"), vim.log.levels.ERROR)
+    end
+    if #jobs == 0 then
+      return notify("нечего выкладывать", vim.log.levels.WARN)
+    end
+    run_jobs(jobs)
   end
-  if #jobs == 0 then
-    return notify("нечего выкладывать", vim.log.levels.WARN)
+
+  if not opts.pick or #sqls == 0 or #bad > 0 then
+    return build(nil)
   end
-  run_jobs(jobs)
+  -- список — по первому файлу: пачку почти всегда берут из одного проекта, а если нет,
+  -- build() скажет, в каком .env выбранного подключения не нашлось
+  local list = sql.connections(sqls[1])
+  if #list == 0 then
+    return build(nil) -- сообщение про пустой .env соберёт build
+  end
+  sql.select(list, ("Выложить файлов: %d в:"):format(#sqls), function(conn)
+    if not conn then
+      return notify("отменено")
+    end
+    build(conn)
+  end)
 end
 
 function M.setup()
@@ -294,13 +339,17 @@ function M.setup()
   })
 
   vim.api.nvim_create_user_command("SqlDeployFiles", function(opts)
-    M.deploy_files(vim.tbl_map(function(f)
-      return vim.fn.fnamemodify(f, ":p")
-    end, opts.fargs))
+    M.deploy_files(
+      vim.tbl_map(function(f)
+        return vim.fn.fnamemodify(f, ":p")
+      end, opts.fargs),
+      { pick = opts.bang }
+    )
   end, {
     nargs = "+",
+    bang = true,
     complete = "file",
-    desc = "Выложить несколько .sql файлов через sqlcmd (цели — по правилам, без вопросов)",
+    desc = "Выложить несколько .sql файлов через sqlcmd (цели — по правилам; ! — выбрать подключение)",
   })
 end
 
