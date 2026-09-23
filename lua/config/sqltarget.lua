@@ -329,6 +329,28 @@ function M.resolve_databases(file, conn, list)
   return db and { db } or {}, how
 end
 
+---Подключение и базы по правилам, без вопросов — для тех, кому спрашивать нельзя:
+---дополнению (окно выбора посреди набора текста) и выкладке пачкой (по вопросу на файл).
+---@param list table[]? подключения; nil — из .env рядом с файлом
+---@param conn table? подключение уже выбрано руками — тогда по правилам только базы
+---@return { conn: table, dbs: string[], how: string?, list: table[] }? target
+---@return string? why почему цели нет — для сообщения
+function M.resolve(file, list, conn)
+  list = list or sql.connections(file)
+  if #list == 0 then
+    return nil, "не найдено подключений DB_UI_* в .env проекта"
+  end
+  conn = conn or M.resolve_connection(file, list)
+  if not conn then
+    return nil, "не определилось подключение"
+  end
+  local dbs, how = M.resolve_databases(file, conn, list)
+  if #dbs == 0 then
+    return nil, "не определилась база" .. (how and (" (" .. how .. ")") or "")
+  end
+  return { conn = conn, dbs = dbs, how = how, list = list }
+end
+
 -- Базы, копия которых живёт на каждом сервере репозитория: в dgsql icsMaster есть и на
 -- datagroup (default), и на биллинге (crocus), и объект из неё должен появиться на обоих.
 -- Сторож и PATH_RULES называют базы, а сервер у файла один, — поэтому отдельно.

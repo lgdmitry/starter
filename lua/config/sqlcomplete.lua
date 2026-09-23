@@ -21,22 +21,6 @@ local target = require("config.sqltarget")
 
 local M = {}
 
----Подключение и база для файла по правилам — или nil, если однозначно не выходит.
-local function resolve(file)
-  local list = sql.connections(file)
-  if #list == 0 then
-    return nil
-  end
-  local conn = target.resolve_connection(file, list)
-  if not conn then
-    return nil
-  end
-  -- сторож может дать несколько баз (datagroup + ics_ua97) — схема у них общая,
-  -- для подсказок хватит первой
-  local dbs, how = target.resolve_databases(file, conn, list)
-  return dbs[1] and sql.with_database(conn.url, dbs[1]), conn, dbs, how
-end
-
 local function attach(buf)
   -- b:db уже есть у черновика :SqlQuery; пробуем один раз на буфер, иначе при
   -- неудаче правила гонялись бы на каждом входе в insert
@@ -48,13 +32,15 @@ local function attach(buf)
   if vim.bo[buf].buftype ~= "" or file == "" then
     return
   end
-  local ok, url, conn, dbs, how = pcall(resolve, file)
-  if not ok or not url then
+  local ok, t = pcall(target.resolve, file)
+  if not ok or not t then
     return
   end
-  vim.b[buf].db = url
+  -- сторож может дать несколько баз (datagroup + ics_ua97) — схема у них общая,
+  -- для подсказок хватит первой
+  vim.b[buf].db = sql.with_database(t.conn.url, t.dbs[1])
   -- правила уже отработали — пусть статус покажет, куда они привели
-  target.remember(buf, conn, dbs, how)
+  target.remember(buf, t.conn, t.dbs, t.how)
   -- список таблиц — сейчас, а не на первой букве (см. выше)
   pcall(vim.fn["vim_dadbod_completion#fetch"], buf)
 end

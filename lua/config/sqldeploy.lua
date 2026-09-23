@@ -281,34 +281,22 @@ function M.deploy_files(files, opts)
   local function build(chosen)
     local jobs = {}
     for _, file in ipairs(sqls) do
-      local name = vim.fn.fnamemodify(file, ":t")
       local list = sql.connections(file)
-      local conn
-      if #list > 0 and chosen then
-        -- выбранное ищем по имени в .env самого файла: пачка может собраться из разных
-        -- проектов, и учётка у одноимённого подключения там своя
-        conn = sql.by_name(list, chosen.name)
-      elseif #list > 0 then
-        conn = target.resolve_connection(file, list)
+      -- выбранное ищем по имени в .env самого файла: пачка может собраться из разных
+      -- проектов, и учётка у одноимённого подключения там своя
+      local conn = chosen and sql.by_name(list, chosen.name)
+      local t, why
+      if chosen and #list > 0 and not conn then
+        why = "нет подключения " .. chosen.name .. " в .env проекта"
+      else
+        t, why = target.resolve(file, list, conn)
       end
-      local dbs, how = {}, nil
-      if conn then
-        dbs, how = target.resolve_databases(file, conn, list)
-      end
-      if #list == 0 then
-        bad[#bad + 1] = name .. ": не найдено подключений DB_UI_* в .env проекта"
-      elseif not conn then
-        bad[#bad + 1] = name
-          .. (
-            chosen and (": нет подключения " .. chosen.name .. " в .env проекта")
-            or ": не определилось подключение"
-          )
-      elseif #dbs == 0 then
-        bad[#bad + 1] = name .. ": не определилась база" .. (how and (" (" .. how .. ")") or "")
+      if not t then
+        bad[#bad + 1] = vim.fn.fnamemodify(file, ":t") .. ": " .. why
       else
         -- выбранное руками подключение — только туда, как у :SqlDeploy!
-        local also = not chosen and target.other_servers(file, conn, dbs, list) or {}
-        jobs[#jobs + 1] = { conn = conn, databases = dbs, file = file, how = how, also = also }
+        local also = not chosen and target.other_servers(file, t.conn, t.dbs, list) or {}
+        jobs[#jobs + 1] = { conn = t.conn, databases = t.dbs, file = file, how = t.how, also = also }
       end
     end
     if #bad > 0 then
