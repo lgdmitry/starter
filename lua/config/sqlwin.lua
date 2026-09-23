@@ -57,12 +57,17 @@ end
 local function keys(buf)
   M.map_object_keys(buf)
   vim.keymap.set("n", "q", function()
-    local from = (vim.b[buf].sqlwin or {}).from
-    vim.cmd("close")
-    if from and vim.api.nvim_win_is_valid(from) then
-      vim.api.nvim_set_current_win(from)
-    end
+    M.close_to((vim.b[buf].sqlwin or {}).from)
   end, { buffer = buf, desc = "Закрыть окно" })
+end
+
+---Закрыть текущее окно и вернуться в from, если оно ещё живо, — q и в окне ответа, и в
+---черновике запроса.
+function M.close_to(from)
+  vim.cmd("close")
+  if from and vim.api.nvim_win_is_valid(from) then
+    vim.api.nvim_set_current_win(from)
+  end
 end
 
 ---@param o table

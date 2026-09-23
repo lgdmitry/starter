@@ -62,4 +62,28 @@ describe("deploy_files", function()
     eq({ "dgsql_dev/icsMaster f_PRC.sql", "crocus_dev/icsMaster f_PRC.sql" }, log.steps)
     eq("не .sql, пропущено: readme.md", log.notes[1].msg)
   end)
+  it("изменённый буфер сохраняется до выкладки", function()
+    local path = fx.ROOT .. "/ics_ua97/bk/b_PRC.sql"
+    vim.cmd("silent edit! " .. vim.fn.fnameescape(path))
+    vim.api.nvim_buf_set_lines(0, 0, -1, false, { "select 2" })
+    local buf = vim.api.nvim_get_current_buf()
+    local sql = t.fresh()
+    t.stub_sql(sql, fx.SERVERS, fx.CONNS)
+    sql.ensure = function()
+      return true
+    end
+    local seen
+    sql.sqlcmd = function(_, _, _, on_done)
+      seen = vim.fn.readfile(path)
+      on_done(0, "", false)
+      return {}
+    end
+    -- silent: иначе :write печатает «... written» посреди вывода раннера
+    vim.cmd("silent lua require('config.sqldeploy').deploy({ fargs = {} })")
+    vim.wait(200, function()
+      return seen ~= nil
+    end)
+    eq({ "select 2" }, seen)
+    eq(false, vim.bo[buf].modified)
+  end)
 end)

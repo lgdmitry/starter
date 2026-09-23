@@ -86,10 +86,15 @@ local function folder_rules(conv, folder)
   end
 end
 
----Адрес сервера по имени окружения — из .mcp.environments.json репозитория.
-local function env_server(root, conv, name)
+---Окружения репозитория (имя -> адрес сервера) из его .mcp.environments.json.
+local function environments(root, conv)
   local data = read_json(root .. "/" .. (conv.mcpEnvironmentsPath or ".claude/.mcp.environments.json"))
-  for _, e in ipairs(data and data.environments or {}) do
+  return data and data.environments or {}
+end
+
+---Адрес сервера по имени окружения.
+local function env_server(root, conv, name)
+  for _, e in ipairs(environments(root, conv)) do
     if e.name == name then
       return e.server
     end
@@ -103,7 +108,7 @@ local function connection_for_server(list, server)
     return nil
   end
   for _, c in ipairs(list) do
-    if (sql.url_parts(c.url)):lower() == server:lower() then
+    if sql.host(c):lower() == server:lower() then
       return c
     end
   end
@@ -216,7 +221,7 @@ end
 ---Запасное правило: первая папка пути, если такая база есть на сервере, иначе база из URL.
 local function database_by_path(file, conn)
   local first = repo_folder(file)
-  local url_db = select(2, sql.url_parts(conn.url))
+  local url_db = sql.url_db(conn)
   if first then
     local exact = server_databases(conn)[first:lower()]
     if exact and exact:lower() ~= url_db:lower() then
@@ -249,7 +254,7 @@ local function connection_by_name(file, list)
   if first then
     local hosting = {}
     for _, c in ipairs(dev) do
-      if select(2, sql.url_parts(c.url)):lower() == first:lower() then
+      if sql.url_db(c):lower() == first:lower() then
         return c
       end
       if server_databases(c)[first:lower()] then
@@ -369,12 +374,10 @@ function M.other_servers(file, conn, dbs, list)
   if #shared == 0 or not conv then
     return {}
   end
-  local data = read_json(root .. "/" .. (conv.mcpEnvironmentsPath or ".claude/.mcp.environments.json"))
-  local host = (sql.url_parts(conn.url)):lower()
-  local seen, out = { [host] = true }, {}
-  for _, e in ipairs(data and data.environments or {}) do
+  local seen, out = { [sql.host(conn):lower()] = true }, {}
+  for _, e in ipairs(environments(root, conv)) do
     local other = connection_for_server(list, e.server)
-    local other_host = other and (sql.url_parts(other.url)):lower()
+    local other_host = other and sql.host(other):lower()
     if other and not seen[other_host] then
       seen[other_host] = true
       local here = {}
@@ -391,7 +394,7 @@ end
 
 ---Запомнить в b:sqltarget, куда правила ведут этот буфер, — для строки статуса.
 function M.remember(buf, conn, dbs, how)
-  vim.b[buf].sqltarget = { conn = conn.name, host = (sql.url_parts(conn.url)), dbs = dbs, how = how }
+  vim.b[buf].sqltarget = { conn = conn.name, host = sql.host(conn), dbs = dbs, how = how }
 end
 
 ---Текст для строки статуса: «подключение@сервер · базы» или "".
@@ -412,7 +415,7 @@ function M.statusline()
       local ok, conn = pcall(function()
         return sql.by_name(sql.connections(ctx.file or ""), ctx.conn)
       end)
-      t = { key = key, conn = ctx.conn, host = ok and conn and (sql.url_parts(conn.url)) or "", dbs = { ctx.db } }
+      t = { key = key, conn = ctx.conn, host = ok and conn and sql.host(conn) or "", dbs = { ctx.db } }
       vim.b.sqltarget = t
     end
   end
@@ -499,7 +502,7 @@ function M.pick(opts, cb)
     -- уедет файл, а не где ещё поищут объект
     local rule_dbs, rule_how, fallback = dbs, how, false
     if opts.url_fallback and not opts.database then
-      dbs, how, fallback = M.search_order(dbs, how, select(2, sql.url_parts(conn.url)), opts.bang)
+      dbs, how, fallback = M.search_order(dbs, how, sql.url_db(conn), opts.bang)
     end
     if #dbs == 0 then
       return notify(
@@ -565,7 +568,7 @@ function M.setup()
       title = "SqlWhere",
     }, function(conn, dbs, _, how)
       sql.notify(
-        ("%s (%s)\nбазы: %s\n%s"):format(conn.name, (sql.url_parts(conn.url)), table.concat(dbs, ", "), how or ""),
+        ("%s (%s)\nбазы: %s\n%s"):format(conn.name, sql.host(conn), table.concat(dbs, ", "), how or ""),
         vim.log.levels.INFO,
         "SqlWhere"
       )

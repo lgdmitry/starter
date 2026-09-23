@@ -145,6 +145,16 @@ function M.url_parts(url)
   return u.host or "", ((u.path or ""):gsub("^/", ""))
 end
 
+---Хост подключения: по нему подключение из .env сверяют с сервером окружения.
+function M.host(conn)
+  return (M.url_parts(conn.url))
+end
+
+---База из URL подключения ("" — если её там нет).
+function M.url_db(conn)
+  return select(2, M.url_parts(conn.url))
+end
+
 ---URL подключения с подменённой базой — для b:db, чтобы работало дополнение имён
 ---таблиц и колонок (vim-dadbod-completion смотрит именно на b:db).
 function M.with_database(url, database)

@@ -66,6 +66,11 @@ local function conn_names(steps)
   return names
 end
 
+---Куда едет файл задания: свой сервер и другие серверы из also.
+local function targets(job)
+  return vim.list_extend({ { conn = job.conn, databases = job.databases } }, job.also or {})
+end
+
 ---Выкладывает по очереди: каждый файл — в каждую свою базу. Баз обычно несколько
 ---(маска часто называет их пачкой: 0x3000000 -> DataGroup + ICS_UA97), и объект
 ---должен появиться во всех; файлов больше одного, когда выкладывают выделенное в
@@ -86,7 +91,7 @@ local function run_jobs(jobs)
         vim.log.levels.ERROR
       )
     end
-    for _, t in ipairs(vim.list_extend({ { conn = job.conn, databases = job.databases } }, job.also or {})) do
+    for _, t in ipairs(targets(job)) do
       for _, database in ipairs(t.databases) do
         steps[#steps + 1] = { conn = t.conn, database = database, file = job.file, codepage = codepage }
       end
@@ -103,7 +108,7 @@ local function run_jobs(jobs)
   local target_name = table.concat(conn_names(steps), ", ")
   if single then
     local parts = {}
-    for _, t in ipairs(vim.list_extend({ { conn = jobs[1].conn, databases = jobs[1].databases } }, jobs[1].also or {})) do
+    for _, t in ipairs(targets(jobs[1])) do
       parts[#parts + 1] = t.conn.name .. " / " .. table.concat(t.databases, ", ")
     end
     target_name = table.concat(parts, "; ")
@@ -194,35 +199,6 @@ local function runner(by_rules)
   end
 end
 
----@param opts table аргументы команды: [1] — имя подключения, [2] — база;
----с ! подключение всегда спрашивается, без ! выбирается само, когда это однозначно
-function M.deploy(opts)
-  local file = vim.api.nvim_buf_get_name(0)
-  if file == "" or vim.bo.buftype ~= "" then
-    return notify("нет файла в буфере", vim.log.levels.ERROR)
-  end
-  -- sqlcmd читает файл с диска, а не буфер: без записи выложилась бы прошлая версия
-  if vim.bo.modified then
-    local ok, err = pcall(vim.cmd.write)
-    if not ok then
-      return notify("не сохранился буфер: " .. tostring(err), vim.log.levels.ERROR)
-    end
-  end
-  if not sql.ensure("SqlDeploy") then
-    return
-  end
-
-  target.pick({
-    file = file,
-    bang = opts.bang,
-    name = opts.fargs[1],
-    database = opts.fargs[2],
-    prompt = "Выложить " .. vim.fn.fnamemodify(file, ":t") .. " в:",
-    hint = ". Можно указать явно: :SqlDeploy <подключение> <база>",
-    title = "SqlDeploy",
-  }, runner(not (opts.bang or opts.fargs[1])))
-end
-
 ---Записывает файл, если он открыт в изменённом буфере: sqlcmd читает диск, и без
 ---этого выложилась бы прошлая версия — молча и незаметно. Буфер ищем перебором, а не
 ---через bufnr(): тот матчит имя как шаблон и на коротком пути найдёт не тот буфер.
@@ -239,6 +215,32 @@ local function save_if_modified(file)
       end
     end
   end
+end
+
+---@param opts table аргументы команды: [1] — имя подключения, [2] — база;
+---с ! подключение всегда спрашивается, без ! выбирается само, когда это однозначно
+function M.deploy(opts)
+  local file = vim.api.nvim_buf_get_name(0)
+  if file == "" or vim.bo.buftype ~= "" then
+    return notify("нет файла в буфере", vim.log.levels.ERROR)
+  end
+  local err = save_if_modified(file)
+  if err then
+    return notify(err, vim.log.levels.ERROR)
+  end
+  if not sql.ensure("SqlDeploy") then
+    return
+  end
+
+  target.pick({
+    file = file,
+    bang = opts.bang,
+    name = opts.fargs[1],
+    database = opts.fargs[2],
+    prompt = "Выложить " .. vim.fn.fnamemodify(file, ":t") .. " в:",
+    hint = ". Можно указать явно: :SqlDeploy <подключение> <база>",
+    title = "SqlDeploy",
+  }, runner(not (opts.bang or opts.fargs[1])))
 end
 
 ---Выложить сразу несколько файлов: :SqlDeployFiles или <leader>dd по выделенным (Tab)

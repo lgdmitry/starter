@@ -80,11 +80,7 @@ local function query_buffer(conn, database, file)
       end
       return
     end
-    local from = vim.b[buf].sqlquery_from
-    vim.cmd("close")
-    if from and vim.api.nvim_win_is_valid(from) then
-      vim.api.nvim_set_current_win(from)
-    end
+    sqlwin.close_to(vim.b[buf].sqlquery_from)
   end, { buffer = buf, desc = "Закрыть буфер запроса" })
   return buf
 end

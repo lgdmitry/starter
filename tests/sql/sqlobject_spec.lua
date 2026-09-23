@@ -10,7 +10,7 @@ local CONNS = { { name = "srv_dev", url = "sqlserver://srv/icsMaster" } }
 
 local function setup(reply)
   vim.cmd("silent! only")
-  vim.cmd("edit! " .. vim.fn.fnameescape(ROOT .. "/ics_ua97/a_PRC.sql"))
+  vim.cmd("silent edit! " .. vim.fn.fnameescape(ROOT .. "/ics_ua97/a_PRC.sql"))
   local sql = t.fresh()
   local log = t.stub_sql(sql, SERVERS, CONNS)
   log.sqlcmd = {}
