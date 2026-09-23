@@ -1,0 +1,3 @@
+# Переводы строк — LF везде, независимо от core.autocrlf: иначе на Windows checkout
+# пишет файлы с CRLF, а stylua (line_endings = Unix) считает их неотформатированными.
+* text=auto eol=lf
