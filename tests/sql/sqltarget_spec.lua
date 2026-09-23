@@ -211,3 +211,38 @@ describe("pick", function()
     eq("отменено", log.notes[1].msg)
   end)
 end)
+
+describe("search_order", function()
+  local target = setup()
+  local function order(...)
+    return { target.search_order(...) }
+  end
+  it("по правилам — база из URL последней", function()
+    eq(
+      { { "ServiceControle", "Crocus" }, "p, потом база из URL", false },
+      order({ "ServiceControle" }, "p", "Crocus")
+    )
+  end)
+  it("руками — первой, остальные следом", function()
+    eq(
+      { { "Crocus", "ServiceControle" }, "база подключения, потом p", false },
+      order({ "ServiceControle", "crocus" }, "p", "Crocus", true)
+    )
+  end)
+  it("руками и баз по правилам нет — только она", function()
+    eq({ { "Crocus" }, "база подключения", false }, order({}, nil, "Crocus", true))
+  end)
+  it("уже среди баз файла — порядок не трогаем", function()
+    eq({ { "a", "crocus", "b" }, "p", false }, order({ "a", "crocus", "b" }, "p", "Crocus"))
+  end)
+  it(
+    "баз по правилам нет — только она, и это запасной вариант",
+    function()
+      eq({ { "Crocus" }, "база из URL, нужна X", true }, order({}, "нужна X", "Crocus"))
+      eq({ { "Crocus" }, "база из URL, правила базы не дали", true }, order({}, nil, "Crocus"))
+    end
+  )
+  it("в URL базы нет — как было", function()
+    eq({ { "a" }, "p", false }, order({ "a" }, "p", ""))
+  end)
+end)

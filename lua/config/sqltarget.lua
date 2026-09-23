@@ -423,6 +423,40 @@ function M.statusline()
   return ("%s@%s · %s"):format(t.conn, t.host ~= "" and t.host or "?", dbs)
 end
 
+---Где искать объект для просмотра: базы файла плюс база из URL подключения.
+---
+---Правила знают, куда файл выкладывать, а не где смотреть. gK на файле из ics_ua97/** с
+---crocus_dev упирался в «нужна база ics_ua97», а на файле из ServiceControle/** искал
+---только в ServiceControle, хотя объект мог быть и в Crocus. Поэтому база подключения
+---тоже в списке, а место её зависит от того, кто выбрал подключение. lookup
+---останавливается на первой базе, где объект нашёлся, и порядок решает: ccCommands —
+---таблица в ServiceControle и вьюха в Crocus.
+---  выбрали руками (gK) — сначала она: crocus_dev и значит «смотреть в Crocus»;
+---  по правилам (K)     — в конце: сначала базы файла, она — если там пусто.
+---@param first boolean? подключение выбрано руками
+---@return string[] dbs, string? how
+---@return boolean fallback правила баз не дали, осталась только база из URL
+function M.search_order(dbs, how, url_db, first)
+  if url_db == "" then
+    return dbs, how, false
+  end
+  local rest = vim.tbl_filter(function(db)
+    return db:lower() ~= url_db:lower()
+  end, dbs)
+  if first then
+    return vim.list_extend({ url_db }, rest),
+      "база подключения" .. (#rest > 0 and (", потом " .. (how or "")) or ""),
+      false
+  end
+  if #rest < #dbs then
+    return dbs, how, false -- она уже среди баз файла, и место её там и есть
+  end
+  if #dbs == 0 then
+    return { url_db }, "база из URL, " .. (how or "правила базы не дали"), true
+  end
+  return vim.list_extend(rest, { url_db }), how .. ", потом база из URL", false
+end
+
 ---Подключение и базы для файла: сначала по правилам, а если однозначно не выходит —
 ---спрашиваем. Форма одна на все команды, поэтому всё различие вынесено в opts.
 ---@param opts table
@@ -463,30 +497,9 @@ function M.pick(opts, cb)
     end
     -- для статуса — то, что дали правила, без базы из URL: статус показывает, куда
     -- уедет файл, а не где ещё поищут объект
-    local rule_dbs, rule_how = dbs, how
-    local fallback = false
-    local url_db = select(2, sql.url_parts(conn.url))
-    if opts.url_fallback and not opts.database and url_db ~= "" then
-      -- правила знают, куда файл выкладывать, а не где смотреть. gK на файле из
-      -- ics_ua97/** с crocus_dev упирался в «нужна база ics_ua97», а на файле из
-      -- ServiceControle/** искал только в ServiceControle, хотя объект мог быть и в
-      -- Crocus. Поэтому база подключения тоже в списке, а место её зависит от того, кто
-      -- выбрал подключение. lookup останавливается на первой базе, где объект нашёлся, и
-      -- порядок решает: ccCommands — таблица в ServiceControle и вьюха в Crocus.
-      --   выбрали руками (gK) — сначала она: crocus_dev и значит «смотреть в Crocus»;
-      --   по правилам (K)     — в конце: сначала базы файла, она — если там пусто
-      local rest = vim.tbl_filter(function(db)
-        return db:lower() ~= url_db:lower()
-      end, dbs)
-      if opts.bang then
-        dbs = vim.list_extend({ url_db }, rest)
-        how = "база подключения" .. (#rest > 0 and (", потом " .. (how or "")) or "")
-      elseif #rest == #dbs then
-        fallback = #dbs == 0
-        dbs = vim.list_extend(rest, { url_db })
-        how = fallback and ("база из URL, " .. (how or "правила базы не дали"))
-          or (how .. ", потом база из URL")
-      end
+    local rule_dbs, rule_how, fallback = dbs, how, false
+    if opts.url_fallback and not opts.database then
+      dbs, how, fallback = M.search_order(dbs, how, select(2, sql.url_parts(conn.url)), opts.bang)
     end
     if #dbs == 0 then
       return notify(
