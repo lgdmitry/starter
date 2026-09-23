@@ -12,4 +12,11 @@ vim.keymap.set("n", "<leader>cr", function()
   vim.fn.setreg("+", vim.fn.expand("%"))
 end, { desc = "Copy relative path" })
 
+-- Snacks.bufdelete.all() окна не трогает: сплиты остаются, просто с пустым буфером
+-- в каждом. Схлопываем их до одного, чтобы вышел чистый лист.
+vim.keymap.set("n", "<leader>ba", function()
+  Snacks.bufdelete.all()
+  vim.cmd("silent! only")
+end, { desc = "Delete All Buffers and Windows" })
+
 vim.keymap.set("i", "hh", "<Esc>l", { desc = "Exit insert mode" })
