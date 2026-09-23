@@ -2,10 +2,11 @@
 --
 -- Сессии пишет persistence.nvim (он есть в LazyVim): при выходе — сессию для текущей
 -- папки, руками — <leader>qs (сессия папки) и <leader>ql (последняя вообще).
--- Здесь только автозагрузка: nvim без аргументов сначала ищет сессию текущей папки,
--- а если её нет — берёт самую свежую из сохранённых. Сессий нет вовсе — остаётся
--- дашборд, он никуда не убран. NVIM_RESTORE_LAST=1 в окружении пропускает поиск
--- по cwd и сразу берёт самую свежую (см. force_last ниже).
+-- Здесь только автозагрузка: nvim без аргументов открывает сессию текущей папки, а
+-- если её нет — остаётся дашборд. Откатываться на самую свежую сессию нельзя: в новой
+-- папке (свежий worktree, новый проект) тогда всплывает чужой проект с чужим cwd.
+-- NVIM_RESTORE_LAST=1 в окружении пропускает поиск по cwd и сразу берёт самую
+-- свежую (см. force_last ниже).
 
 local M = {}
 
@@ -41,14 +42,17 @@ local function force_last()
   return vim.env.NVIM_RESTORE_LAST == "1"
 end
 
----Восстанавливает сессию текущей папки, иначе самую свежую из сохранённых.
+---Восстанавливает сессию текущей папки, а с NVIM_RESTORE_LAST=1 — самую свежую.
 ---@return boolean восстановили ли что-нибудь
 function M.restore()
   local persistence = require("persistence")
-  if not force_last() and session_for_cwd(persistence) then
-    persistence.load()
-    reload_current_buffer()
-    return true
+  if not force_last() then
+    if session_for_cwd(persistence) then
+      persistence.load()
+      reload_current_buffer()
+      return true
+    end
+    return false
   end
   local last = persistence.last()
   if last and vim.fn.filereadable(last) == 1 then
