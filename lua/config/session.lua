@@ -63,9 +63,78 @@ function M.restore()
   return false
 end
 
+---Файл :mksession буферы не закрывает: он делает только `silent only` (окна) и
+---`badd` для своих файлов, а всё, что было открыто до него, остаётся в списке —
+---при переключении через <leader>qS / <leader>fp в bufferline висит смесь двух проектов.
+---Закрываем сами перед загрузкой. Только файловые буферы: терминалы (claude,
+---lazygit) убивать вместе с их процессами незачем. Snacks.bufdelete спрашивает
+---про несохранённые изменения; на Cancel такой буфер просто остаётся.
+local function close_file_buffers()
+  Snacks.bufdelete.delete({
+    filter = function(buf)
+      return vim.bo[buf].buftype == ""
+    end,
+  })
+end
+
+---:mksession пишет arglist всегда, независимо от 'sessionoptions'. Запустили
+---`nvim C:/repo/dgsql/x.sql` — x.sql навсегда в arglist: он уезжает в сессию
+---любого проекта, куда потом переключились или где вышли, и оттуда при каждой
+---загрузке снова всплывает лишним буфером (`$argadd`). Для сессий arglist не
+---нужен, поэтому чистим его перед каждым сохранением.
+local function clear_arglist()
+  if vim.fn.argc(-1) > 0 then
+    vim.cmd("%argdelete")
+  end
+end
+
+---Сессию persistence пишет только на VimLeavePre, а <leader>qS и <leader>fp сначала
+---делают chdir и только потом грузят другую сессию — прежний проект так и не
+---сохранялся (всё, что в нём открыли после старта, терялось), а его буферы при
+---выходе уезжали в сессию нового. DirChangedPre приходит ещё со старым cwd, так что
+---persistence.current() указывает куда надо. Не пишем:
+--- - во время source самой сессии (SessionLoad): в ней свой `cd`, а cwd к этому
+---   моменту уже новый — затёрли бы файл, который сейчас читается;
+--- - при window/tab-local cwd: current() берёт cwd окна, это не смена проекта;
+--- - пустой список (как persistence с `need = 1`), иначе затрём сессию пустой.
+local function save_before_cd()
+  local persistence = require("persistence")
+  if not persistence.active() or vim.g.SessionLoad == 1 or vim.v.event.scope ~= "global" then
+    return
+  end
+  if vim.fs.normalize(vim.v.event.directory) == vim.fs.normalize(vim.fn.getcwd()) then
+    return
+  end
+  local has_files = vim.iter(vim.api.nvim_list_bufs()):any(function(buf)
+    return vim.bo[buf].buflisted and vim.bo[buf].buftype == "" and vim.api.nvim_buf_get_name(buf) ~= ""
+  end)
+  if has_files then
+    clear_arglist()
+    persistence.save()
+  end
+end
+
 function M.setup()
+  local group = vim.api.nvim_create_augroup("restore_session", { clear = true })
+  vim.api.nvim_create_autocmd("User", {
+    group = group,
+    pattern = "PersistenceLoadPre",
+    desc = "Закрыть буферы прежней сессии",
+    callback = close_file_buffers,
+  })
+  vim.api.nvim_create_autocmd("User", {
+    group = group,
+    pattern = "PersistenceSavePre",
+    desc = "Не писать arglist в сессию",
+    callback = clear_arglist,
+  })
+  vim.api.nvim_create_autocmd("DirChangedPre", {
+    group = group,
+    desc = "Сохранить сессию прежнего проекта",
+    callback = save_before_cd,
+  })
   vim.api.nvim_create_autocmd("VimEnter", {
-    group = vim.api.nvim_create_augroup("restore_session", { clear = true }),
+    group = group,
     nested = true, -- иначе у файлов из сессии не сработают FileType, LSP и прочее
     desc = "Открыть последнюю сессию вместо дашборда",
     callback = function()
