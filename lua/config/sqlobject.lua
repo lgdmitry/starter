@@ -267,8 +267,9 @@ end
 
 ---Гоняет запрос по базам подряд, пока объект не найдётся: файл лежит в ics_ua97, а
 ---объект рядом с ним вполне может жить в icsMaster.
----@param o table conn, dbs, title, args, ctx и всё, что нужно окну: kind, filetype, bottom;
----on_missing — что делать, когда базы кончились (по умолчанию сказать, что не нашли)
+---@param o table conn, dbs, title, opts (флаги sqlcmd), file и всё, что нужно окну: kind,
+---filetype, bottom; on_missing — что делать, когда базы кончились (по умолчанию сказать,
+---что не нашли)
 local function lookup(o, i)
   local db = o.dbs[i]
   if not db then
@@ -277,23 +278,21 @@ local function lookup(o, i)
     end
     return notify(o.title .. ": не найден в " .. table.concat(o.dbs, ", "), vim.log.levels.WARN)
   end
-  sql.sqlcmd(o.conn, db, o.args, function(code, text)
-    vim.schedule(function()
-      if not_found(text) then
-        return lookup(o, i + 1)
-      end
-      if code ~= 0 then
-        notify(o.title .. " @ " .. o.conn.name .. "/" .. db .. ": sqlcmd вернул " .. code, vim.log.levels.ERROR)
-      end
-      sqlwin.show({
-        kind = o.kind or "object",
-        title = ("%s @ %s/%s"):format(o.title, o.conn.name, db),
-        text = text,
-        ctx = { file = o.file, conn = o.conn.name, db = db },
-        filetype = o.filetype,
-        bottom = o.bottom,
-      })
-    end)
+  sql.run({ conn = o.conn, db = db, opts = o.opts }, function(code, text)
+    if not_found(text) then
+      return lookup(o, i + 1)
+    end
+    if code ~= 0 then
+      notify(o.title .. " @ " .. o.conn.name .. "/" .. db .. ": sqlcmd вернул " .. code, vim.log.levels.ERROR)
+    end
+    sqlwin.show({
+      kind = o.kind or "object",
+      title = ("%s @ %s/%s"):format(o.title, o.conn.name, db),
+      text = text,
+      ctx = { file = o.file, conn = o.conn.name, db = db },
+      filetype = o.filetype,
+      bottom = o.bottom,
+    })
   end)
 end
 
@@ -304,7 +303,7 @@ local function message_job(conn, dbs, file, id)
     dbs = { dbs[1] },
     file = file,
     title = "message " .. id,
-    args = sql.args({ query = MESSAGE:format(id), trunc = 0 }),
+    opts = { query = MESSAGE:format(id), trunc = 0 },
     kind = "message",
     filetype = "",
     bottom = true,
@@ -318,7 +317,7 @@ local function enum_job(conn, dbs, file, id)
     dbs = dbs,
     file = file,
     title = "enum " .. id,
-    args = sql.args({ query = ENUM:format(id, id, id), width = 8000, trunc = 50 }),
+    opts = { query = ENUM:format(id, id, id), width = 8000, trunc = 50 },
     filetype = "",
   }
 end
@@ -365,7 +364,7 @@ function M.define(opts)
       dbs = db and { db } or dbs,
       file = file,
       title = object,
-      args = sql.args({ query = DESCRIBE:format((object:gsub("'", "''"))), trunc = 0 }),
+      opts = { query = DESCRIBE:format((object:gsub("'", "''"))), trunc = 0 },
     }, 1)
   end)
 end
@@ -384,11 +383,11 @@ function M.rows(opts)
       dbs = db and { db } or dbs,
       file = file,
       title = object .. " (" .. limit .. ")",
-      args = sql.args({
+      opts = {
         query = ("set nocount on; select top %d * from %s;"):format(limit, object),
         width = 8000,
         trunc = 30,
-      }),
+      },
       filetype = "",
     }, 1)
   end)
@@ -438,41 +437,32 @@ function M.usages(opts)
       -- находится всегда, а спрашивают, кто его вызывает
       parts[#parts + 1] = USAGE:format((db:gsub("'", "''")), b, b, b, pattern, quoted)
     end
-    -- через файл, а не -Q: выделенный текст сообщения бывает кириллическим, а
-    -- командная строка приезжает в sqlcmd в ANSI
-    local input = vim.fn.tempname() .. ".sql"
     local query = "set nocount on;\n" .. table.concat(parts, "\nunion all\n") .. "\norder by 1, 2;"
-    vim.fn.writefile(vim.split(query, "\n"), input)
     local title = "usages of " .. text
     local where = table.concat(dbs, ",")
-    local done = sql.progress(("ищу %s в %s/%s…"):format(text, conn.name, where), "SqlObject")
-    local args = sql.args({ input = input, width = 8000, trunc = 128 })
-    local started = sql.sqlcmd(conn, dbs[1], args, function(code, out, cancelled)
-      vim.schedule(function()
-        done()
-        os.remove(input)
-        if cancelled then
-          return
-        end
-        if code ~= 0 then
-          notify(title .. " @ " .. conn.name .. ": sqlcmd вернул " .. code, vim.log.levels.ERROR)
-        end
-        sqlwin.show({
-          kind = "usages",
-          title = ("%s @ %s/%s"):format(title, conn.name, where),
-          text = out,
-          -- K на имени из списка спросит первую базу — объекты из остальных баз
-          -- смотреть через :SqlDef база.dbo.имя
-          ctx = { file = file, conn = conn.name, db = dbs[1] },
-          filetype = "",
-          bottom = true,
-        })
-      end)
+    sql.run({
+      conn = conn,
+      db = dbs[1],
+      -- через файл (lines), а не -Q: выделенный текст сообщения бывает кириллическим
+      lines = vim.split(query, "\n"),
+      opts = { width = 8000, trunc = 128 },
+      progress = ("ищу %s в %s/%s…"):format(text, conn.name, where),
+      title = "SqlObject",
+    }, function(code, out)
+      if code ~= 0 then
+        notify(title .. " @ " .. conn.name .. ": sqlcmd вернул " .. code, vim.log.levels.ERROR)
+      end
+      sqlwin.show({
+        kind = "usages",
+        title = ("%s @ %s/%s"):format(title, conn.name, where),
+        text = out,
+        -- K на имени из списка спросит первую базу — объекты из остальных баз
+        -- смотреть через :SqlDef база.dbo.имя
+        ctx = { file = file, conn = conn.name, db = dbs[1] },
+        filetype = "",
+        bottom = true,
+      })
     end)
-    if not started then
-      done() -- процесс не запустился, ответа не будет — гасим сами
-      os.remove(input)
-    end
   end)
 end
 

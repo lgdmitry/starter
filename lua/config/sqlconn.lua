@@ -297,6 +297,47 @@ function M.sqlcmd(conn, database, extra, on_done)
   return job.proc
 end
 
+---sqlcmd вместе с тем, что раньше повторяла каждая команда с окном ответа: запрос через
+---временный файл, крутилка, отмена. Выкладка сюда не ходит: у неё отмена значит
+---«показать то, что успело выложиться», а здесь — «ответа нет».
+---@param o table
+---  conn, db — куда
+---  opts     — флаги для M.args
+---  lines    — текст запроса: уйдёт через временный файл (-i), а не -Q — командная
+---             строка приезжает в sqlcmd в ANSI и кириллица в литералах бьётся, а файл
+---             с -f i:65001 читается как utf-8
+---  progress — текст крутилки на время запроса (nil — без неё)
+---  title    — её заголовок
+---@param cb fun(code: integer, text: string) в основном цикле; после :SqlCancel не зовётся —
+---sqlcmd отдаёт обрывок вывода или пустоту, а окно с ответом ещё и затёрло бы прошлый,
+---настоящий результат
+function M.run(o, cb)
+  local opts, input = o.opts or {}, nil
+  if o.lines then
+    input = vim.fn.tempname() .. ".sql"
+    vim.fn.writefile(o.lines, input)
+    opts = vim.tbl_extend("force", opts, { input = input })
+  end
+  local done = o.progress and M.progress(o.progress, o.title) or function() end
+  local function cleanup()
+    done()
+    if input then
+      os.remove(input)
+    end
+  end
+  local started = M.sqlcmd(o.conn, o.db, M.args(opts), function(code, text, cancelled)
+    vim.schedule(function()
+      cleanup()
+      if not cancelled then
+        cb(code, text)
+      end
+    end)
+  end)
+  if not started then
+    cleanup() -- процесс не запустился, колбэка не будет — гасим сами
+  end
+end
+
 ---Разовый запрос одной колонки через sqlcmd, синхронно (ответ короткий и быстрый).
 function M.query(conn, database, sql)
   if not M.ensure() then

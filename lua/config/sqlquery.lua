@@ -139,44 +139,28 @@ function M.run(opts)
   end
 
   pick(opts.bang, function(conn, database, file)
-    -- sqlcmd читает запрос из файла, а не из -Q: через -Q командная строка приезжает
-    -- в ANSI и кириллица в литералах бьётся, а с -f i:65001 файл читается как utf-8
-    local input = vim.fn.tempname() .. ".sql"
-    vim.fn.writefile(lines, input)
-    local args = sql.args({ input = input, width = 8000, trunc = M.column_width })
-
-    -- не разовое уведомление, а живущее до ответа: запрос может думать десятки
-    -- секунд, и всё это время единственный признак работы — эта крутилка
-    local done = sql.progress(
-      ("выполняется на %s/%s… (<leader>dc — отменить)"):format(conn.name, database),
-      "SqlQuery"
-    )
-    local started = sql.sqlcmd(conn, database, args, function(code, text, cancelled)
-      vim.schedule(function()
-        done()
-        os.remove(input)
-        -- после отмены sqlcmd отдаёт обрывок вывода или пустоту — показывать нечего,
-        -- а окно с ответом ещё и затёрло бы прошлый, настоящий результат
-        if cancelled then
-          return
-        end
-        if code ~= 0 then
-          notify(("sqlcmd вернул %d (%s/%s)"):format(code, conn.name, database), vim.log.levels.ERROR)
-        end
-        sqlwin.show({
-          kind = "query",
-          title = ("запрос @ %s/%s"):format(conn.name, database),
-          text = text,
-          ctx = { file = file, conn = conn.name, db = database },
-          filetype = "",
-          bottom = true,
-        })
-      end)
+    sql.run({
+      conn = conn,
+      db = database,
+      lines = lines,
+      opts = { width = 8000, trunc = M.column_width },
+      -- не разовое уведомление, а живущее до ответа: запрос может думать десятки
+      -- секунд, и всё это время единственный признак работы — эта крутилка
+      progress = ("выполняется на %s/%s… (<leader>dc — отменить)"):format(conn.name, database),
+      title = "SqlQuery",
+    }, function(code, text)
+      if code ~= 0 then
+        notify(("sqlcmd вернул %d (%s/%s)"):format(code, conn.name, database), vim.log.levels.ERROR)
+      end
+      sqlwin.show({
+        kind = "query",
+        title = ("запрос @ %s/%s"):format(conn.name, database),
+        text = text,
+        ctx = { file = file, conn = conn.name, db = database },
+        filetype = "",
+        bottom = true,
+      })
     end)
-    if not started then
-      done() -- процесс не запустился, ответа не будет — гасим сами
-      os.remove(input)
-    end
   end)
 end
 
