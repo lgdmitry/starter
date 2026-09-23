@@ -66,7 +66,19 @@ return {
     picker = {
       sources = {
         -- dev перекрывает дефолт целиком, поэтому дефолтные каталоги повторяем
-        projects = { dev = { "~/dev", "~/projects", "c:/repo" } },
+        projects = {
+          dev = { "~/dev", "~/projects", "c:/repo" },
+          -- recent-проекты берутся из oldfiles, а туда попадает всё временное
+          -- (*.dbout dadbod, тестовые файлы) — Temp в списке проектов не нужен.
+          -- Сравнение по префиксу с учётом регистра, а часть путей в shada записана
+          -- через короткое 8.3-имя профиля, поэтому оба варианта.
+          filter = {
+            paths = {
+              ["~/AppData/Local/Temp"] = false,
+              ["C:/Users/PESOTS~1/AppData/Local/Temp"] = false,
+            },
+          },
+        },
         files = vim.tbl_deep_extend("force", vim.deepcopy(by_mtime), vim.deepcopy(deploy)),
         git_files = vim.tbl_deep_extend("force", vim.deepcopy(by_mtime), vim.deepcopy(deploy)),
         -- дефолт explorer рисует превью в узкой (40 колонок) панели под деревом;
