@@ -23,3 +23,6 @@ vim.g.omni_sql_no_default_maps = 1
 -- Здесь, а не в config/autocmds.lua: тот грузится на VeryLazy, то есть уже после
 -- VimEnter, и первого сброса раскладки на старте не случилось бы вовсе.
 require("config.keyboard").setup()
+
+-- Шрифт, анимации и клавиши GUI-клиента; вне Neovide ничего не делает.
+require("config.neovide").setup()
