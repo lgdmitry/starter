@@ -540,37 +540,17 @@ function M.file(opts)
   end)
 end
 
----K, gK и gf — общие для sql-буферов и окон с ответом (их ставит config.sqlwin: там
----filetype бывает и пустой, так что по FileType они бы туда не попали).
-function M.map_def_keys(buf)
-  vim.keymap.set({ "n", "x" }, "K", "<cmd>SqlDef<cr>", { buffer = buf, desc = "Код объекта в базе" })
-  vim.keymap.set(
-    { "n", "x" },
-    "gK",
-    "<cmd>SqlDef!<cr>",
-    { buffer = buf, desc = "Код объекта на другом сервере" }
-  )
-  -- gf только здесь, а не глобально: в остальных буферах это встроенный переход по пути,
-  -- а в .sql путей не бывает — зато бывают имена объектов, у каждого свой файл
-  vim.keymap.set(
-    { "n", "x" },
-    "gf",
-    "<cmd>SqlFile<cr>",
-    { buffer = buf, desc = "Файл объекта в репозитории" }
-  )
-end
-
 function M.setup()
   -- K в sql-буферах не перебивается hover-маппингом LazyVim: тот отключён для
   -- filetype sql в спеке nvim-lspconfig (см. lua/plugins/dadbod.lua). Глобальным K
-  -- быть не может — везде, кроме sql, это hover от LSP. В окнах с ответом его вешает
-  -- config.sqlwin: там filetype бывает и пустой.
+  -- быть не может — везде, кроме sql, это hover от LSP. Сами клавиши (K, gK, gf)
+  -- описаны в config.sqlwin: в окнах с ответом он вешает их сам.
   vim.api.nvim_create_autocmd("FileType", {
     group = vim.api.nvim_create_augroup("sqlobject_keys", { clear = true }),
     pattern = "sql",
     desc = "Клавиши просмотра объектов в sql-буферах",
     callback = function(ev)
-      M.map_def_keys(ev.buf)
+      sqlwin.map_object_keys(ev.buf)
     end,
   })
   -- Автокоманды мало: buffer-local маппинг ставится только на будущие sql-буферы, а
@@ -579,7 +559,7 @@ function M.setup()
   -- Snacks.keymap с ft-маппингами: заводит их и в уже загруженных буферах.
   for _, buf in ipairs(vim.api.nvim_list_bufs()) do
     if vim.api.nvim_buf_is_loaded(buf) and vim.bo[buf].filetype == "sql" then
-      M.map_def_keys(buf)
+      sqlwin.map_object_keys(buf)
     end
   end
 

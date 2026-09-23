@@ -29,11 +29,33 @@ local function window_of(slot)
   end
 end
 
+---K, gK и gf — общие для sql-буферов и окон с ответом. Живут здесь, а не в
+---config.sqlobject: окну они нужны всегда (filetype у него бывает и пустой, так что по
+---FileType они бы туда не попали), а require sqlobject отсюда замыкал бы цикл — самим
+---командам тут знать нечего, это только <cmd>.
+function M.map_object_keys(buf)
+  vim.keymap.set({ "n", "x" }, "K", "<cmd>SqlDef<cr>", { buffer = buf, desc = "Код объекта в базе" })
+  vim.keymap.set(
+    { "n", "x" },
+    "gK",
+    "<cmd>SqlDef!<cr>",
+    { buffer = buf, desc = "Код объекта на другом сервере" }
+  )
+  -- gf только здесь, а не глобально: в остальных буферах это встроенный переход по пути,
+  -- а в .sql путей не бывает — зато бывают имена объектов, у каждого свой файл
+  vim.keymap.set(
+    { "n", "x" },
+    "gf",
+    "<cmd>SqlFile<cr>",
+    { buffer = buf, desc = "Файл объекта в репозитории" }
+  )
+end
+
 ---Клавиши окна ответа: q — закрыть и вернуться туда, откуда пришли; K — посмотреть
 ---объект под курсором, уже в подключении и базе этого окна (b:sqlctx), gf — его файл в
 ---том же репозитории, откуда пришёл ответ, gK — объект на другом сервере.
 local function keys(buf)
-  require("config.sqlobject").map_def_keys(buf)
+  M.map_object_keys(buf)
   vim.keymap.set("n", "q", function()
     local from = (vim.b[buf].sqlwin or {}).from
     vim.cmd("close")

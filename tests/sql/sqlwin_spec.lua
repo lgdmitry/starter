@@ -83,6 +83,14 @@ describe("клавиши", function()
       t.truthy(buffer_map(0, lhs), lhs)
     end
   end)
+  it(
+    "окно не тянет за собой sqlobject — зависимость только в одну сторону",
+    function()
+      local sqlwin = reset()
+      sqlwin.show({ title = "a", text = "1", bottom = true })
+      eq(nil, package.loaded["config.sqlobject"])
+    end
+  )
   it("q закрывает и возвращает в исходное окно", function()
     local sqlwin, main = reset()
     vim.cmd("vsplit")
