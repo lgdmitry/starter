@@ -128,14 +128,11 @@ return {
         layerSet({ "n", "x" }, "<right>", mc.nextCursor, { desc = "Следующий курсор главным" })
         layerSet({ "n", "x" }, "<leader>mx", mc.deleteCursor, { desc = "Удалить текущий курсор" })
 
-        -- K (hover/:SqlDef, см. plugins/dadbod.lua) иначе реплицируется на каждый
-        -- курсор через feedkeys — в sql-буфере это значит один sqlcmd на курсор.
-        layerSet(
-          { "n", "x" },
-          "K",
-          function() end,
-          { desc = "Отключено, пока курсоров больше одного" }
-        )
+        -- K (:SqlDef в sql-буферах) здесь когда-то стоял пустышкой, чтобы не плодить
+        -- по sqlcmd на курсор. Так делать нельзя: слой снимается через vim.keymap.del,
+        -- прежний маппинг он не запоминает — а наш K буферный, и после выхода из
+        -- мультикурсора он пропадал насовсем (возвращал только :e, то есть FileType).
+        -- Поэтому от репликации защищается сам :SqlDef, см. config.sqlobject.
 
         layerSet("n", "<esc>", function()
           if not mc.cursorsEnabled() then

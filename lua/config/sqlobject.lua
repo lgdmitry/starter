@@ -298,6 +298,13 @@ end
 ---:SqlDef — код объекта (процедура/функция/вьюха/триггер), состав таблицы, а на числе —
 ---текст сообщения (K прямо на номере внутри RAISERROR(60003, ...)) или значения enum.
 function M.define(opts)
+  -- При нескольких курсорах multicursor повторяет нажатие K через feedkeys на каждом
+  -- из них — это был бы один sqlcmd на курсор. Смотрим package.loaded, а не require:
+  -- плагин может быть ещё не загружен, а тянуть его сюда ради проверки незачем.
+  local mc = package.loaded["multicursor-nvim"]
+  if mc and mc.hasCursors() then
+    return
+  end
   local name, col = wanted_object(opts.fargs)
   if not name then
     return notify("не понял, какой объект смотреть", vim.log.levels.ERROR)
