@@ -32,17 +32,6 @@ M.column_width = 50
 
 local notify = sql.notifier("SqlQuery")
 
----URL подключения с подменённой базой — для b:db, чтобы в буфере запроса работало
----дополнение имён таблиц и колонок (vim-dadbod-completion смотрит именно на b:db).
-local function with_database(url, database)
-  local base, params = url:match("^([^?]*)(.*)$")
-  local authority = base:match("^(.-://[^/]*)")
-  if not authority then
-    return url
-  end
-  return authority .. "/" .. database .. params
-end
-
 ---Есть ли ради чего делить окно: хоть один залистованный буфер с файлом. На пустом
 ---старте (дашборд, [No Name]) вертикальный сплит только режет экран пополам ради
 ---пустоты — там черновик занимает текущее окно.
@@ -70,7 +59,7 @@ local function query_buffer(conn, database, file)
   vim.bo[buf].buftype = "nofile" -- запрос никуда не сохраняется, sqlcmd получает его через временный файл
   vim.bo[buf].bufhidden = "hide"
   vim.bo[buf].swapfile = false
-  vim.b[buf].db = with_database(conn.url, database)
+  vim.b[buf].db = sql.with_database(conn.url, database)
   -- b:sqlctx — та же переменная, что у окон с ответом (config.sqlwin): благодаря ей
   -- K и <leader>dr в черновике спрашивают ту же базу, а не ту, которую вычислили бы
   -- по имени безымянного буфера

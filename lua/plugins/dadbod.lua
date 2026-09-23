@@ -18,11 +18,13 @@
 --   :SqlDef (K), :SqlRows (<leader>dr), :SqlEnum (<leader>de) — посмотреть объект в базе
 --   :SqlQuery (<leader>dq), :SqlRun (<leader>dx) — разовый запрос рядом с процедурой
 --   :SqlCancel (<leader>dc) — прервать выполняющийся sqlcmd (запросы асинхронные)
+--   config.sqlcomplete — b:db для дополнения из базы в обычных .sql файлах
 require("config.sqlconn").setup()
 require("config.sqltarget").setup()
 require("config.sqldeploy").setup()
 require("config.sqlobject").setup()
 require("config.sqlquery").setup()
+require("config.sqlcomplete").setup()
 
 return {
   {

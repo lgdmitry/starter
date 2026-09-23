@@ -145,6 +145,17 @@ function M.url_parts(url)
   return u.host or "", ((u.path or ""):gsub("^/", ""))
 end
 
+---URL подключения с подменённой базой — для b:db, чтобы работало дополнение имён
+---таблиц и колонок (vim-dadbod-completion смотрит именно на b:db).
+function M.with_database(url, database)
+  local base, params = url:match("^([^?]*)(.*)$")
+  local authority = base:match("^(.-://[^/]*)")
+  if not authority then
+    return url
+  end
+  return authority .. "/" .. database .. params
+end
+
 ---Подключение по имени из аргумента команды. Регистр не важен с обеих сторон:
 ---имена из .env приведены к нижнему, а из vim.g.dbs — какие записали.
 function M.by_name(list, wanted)

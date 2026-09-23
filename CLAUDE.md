@@ -62,21 +62,50 @@ or variable, which only shows up when the server rejects it.
 Not a plugin — own code on top of vim-dadbod, wired up from
 `lua/plugins/dadbod.lua`:
 
-- `lua/config/sqlconn.lua` — shared part: picking connection and database,
-  running `sqlcmd`.
+- `lua/config/sqlconn.lua` — transport: connections from `.env`, auth,
+  encodings, running `sqlcmd` asynchronously with a progress spinner;
+  `:SqlCancel` (`<leader>dc`) kills a running one.
+- `lua/config/sqltarget.lua` — *where* to go for a given file: which
+  connection and which databases (see below). `:SqlCacheClear` forgets what
+  it cached.
+- `lua/config/sqlwin.lua` — the result windows: one vertical split for object
+  code, one bottom split for everything read as output; the next answer
+  reuses the window. `b:sqlctx` in them keeps file/conn/db, so `K`,
+  `:SqlRows`, `:SqlRun` inside a result window go where the result came from.
 - `lua/config/sqldeploy.lua` — `:SqlDeploy` (`<leader>dd`): deploy the
-  current `.sql` file.
+  current `.sql` file; `:SqlDeployFiles` (and `<leader>dd` on Tab-selected
+  entries in a snacks picker / explorer, action in `lua/plugins/snacks.lua`)
+  deploys several at once.
 - `lua/config/sqlobject.lua` — `:SqlDef` (`K`), `:SqlRows` (`<leader>dr`),
-  `:SqlEnum` (`<leader>de`): inspect an object in the database. Replaces what
-  SQLTools used to do in Sublime (`desc table` / `desc function` /
-  `show records` / `show enum`).
+  `:SqlEnum` (`<leader>de`), `:SqlUsages` (`<leader>du`), `:SqlFile` (`gf`):
+  inspect an object in the database, find where a name is used, open the
+  object's file in the repo. Replaces what SQLTools used to do in Sublime
+  (`desc table` / `desc function` / `show records` / `show enum`).
 - `lua/config/sqlquery.lua` — `:SqlQuery` (`<leader>dq`): a scratch query
   buffer bound to the connection and database of the current file;
   `:SqlRun` (`<leader>dx`) runs it, or the visual selection in any sql buffer.
+- `lua/config/sqlcomplete.lua` — sets `b:db` in ordinary `.sql` files (on the
+  first `InsertEnter`, by the `sqltarget` rules, never prompting), so that
+  vim-dadbod-completion completes tables and columns by alias there too —
+  without `b:db` it completes nothing from the database.
 
-Connections are not stored in this config but in each project's `.env`
-(`DB_UI_*` variables, read by `tpope/vim-dotenv`); credentials come from the
-environment (`SQLCMDUSER` etc.).
+Every command takes `!` (and has an uppercase-key twin: `<leader>dD`,
+`<leader>dQ`, `<leader>dU`, `gK`) to pick the connection by hand instead of
+by the rules. `docs/sql-refactor.md` records why the layer is split this way.
+
+Target server and databases are resolved by `sqltarget` from the repo's
+`.claude/repo-conventions.json` (the same rules the `deploy-commit` skill
+uses): server by the top folder's environment, address from
+`.mcp.environments.json`; databases from the file's own `usBases ... OptionsDB`
+guard if present, otherwise by path rules. Without `repo-conventions.json`
+there are fallback rules (dev connection by name/host, database from the first
+path folder or the URL). Login/password always come from the matching
+`DB_UI_*` connection in the project's `.env` (read by `tpope/vim-dotenv`),
+which in turn takes them from the environment (`SQLCMDUSER` etc.).
+
+`multicursor.nvim` replays keys on every cursor; `:SqlDef` itself bails out
+when there are extra cursors, rather than the multicursor layer overriding
+`K` — that override deleted the buffer-local `K` for good on exit.
 
 No Cyrillic in SQL query text passed to `sqlcmd` via `-Q`: the command line
 arrives as ANSI and the text gets mangled. Cyrillic in the returned result is
@@ -114,6 +143,19 @@ triggers already removed.
 `ToUnicodeEx`), but only as a safety net: `PostMessage` is asynchronous, so keys the
 terminal queued in the first milliseconds after `<Esc>` are still translated with the
 old layout. It covers built-in commands only, never mappings.
+
+## Other own modules
+
+- `lua/config/session.lua` (wired from `lua/plugins/persistence.lua`) — start
+  in the session of the current folder instead of the dashboard, never
+  falling back to another project's session (`NVIM_RESTORE_LAST=1` forces the
+  latest one). On a session switch it saves the old project on
+  `DirChangedPre` and wipes its file buffers on `PersistenceLoadPre` —
+  `:mksession` alone leaves them behind.
+- `lua/config/neovide.lua` (wired from `lua/config/options.lua`) — GUI
+  settings, no-op outside Neovide. All animations are off on purpose, and
+  `background` is forced dark: Neovide would take it from the (light) Windows
+  theme.
 
 ## Conventions
 
