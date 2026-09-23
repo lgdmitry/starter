@@ -67,10 +67,16 @@ function M.setup()
   -- В Alacritty Ctrl+Shift+V вставляет сам терминал. У GUI терминала нет, и без этого
   -- вставить из системного буфера в insert, командную строку и :terminal было бы нечем.
   -- В normal вставка и так идёт из системного буфера: LazyVim ставит clipboard=unnamedplus.
-  vim.keymap.set({ "i", "c" }, "<C-S-v>", "<C-r>+", { desc = "Paste from clipboard (Neovide)" })
-  vim.keymap.set("t", "<C-S-v>", function()
-    vim.api.nvim_paste(vim.fn.getreg("+"), true, -1)
-  end, { desc = "Paste from clipboard (Neovide)" })
+  -- Shift+Insert — по той же причине: в Alacritty его тоже обрабатывал терминал.
+  for _, key in ipairs({ "<C-S-v>", "<S-Insert>" }) do
+    vim.keymap.set({ "i", "c" }, key, "<C-r>+", { desc = "Paste from clipboard (Neovide)" })
+    vim.keymap.set("t", key, function()
+      vim.api.nvim_paste(vim.fn.getreg("+"), true, -1)
+    end, { desc = "Paste from clipboard (Neovide)" })
+  end
+  -- В normal вставляем перед курсором, как Shift+Insert в терминале: текст встаёт туда,
+  -- где стоит курсор, а не после него.
+  vim.keymap.set("n", "<S-Insert>", '"+P', { desc = "Paste from clipboard (Neovide)" })
 end
 
 return M
