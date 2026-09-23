@@ -18,6 +18,12 @@ function M.setup()
   -- Тот же шрифт и кегль, что в alacritty.toml, чтобы переход между ними не бил по глазам.
   vim.o.guifont = "JetBrainsMono NF:h15"
 
+  -- Neovide ставит 'background' по теме Windows, а она светлая — и gruvbox уходит в
+  -- light. В Alacritty фон тёмный, потому что nvim спрашивает цвет фона у самого
+  -- терминала (OSC 11), а не у системы. vim.g.neovide_theme в 0.16 уже нет: Neovide
+  -- просто не трогает 'background', если его выставил кто-то другой (can_set_background).
+  vim.o.background = "dark"
+
   -- Никаких анимаций: любая из них — это кадры, в которые на экране ещё не то, что уже
   -- в буфере, то есть ощущаемая задержка ввода. Та же причина, что у snacks_animate
   -- в options.lua. Нули, а не мелкие значения: при нуле Neovide рисует сразу итог.
