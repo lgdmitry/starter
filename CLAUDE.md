@@ -80,7 +80,10 @@ Not a plugin — own code on top of vim-dadbod, wired up from
 - `lua/config/sqldeploy.lua` — `:SqlDeploy` (`<leader>dd`): deploy the
   current `.sql` file; `:SqlDeployFiles` (and `<leader>dd` on Tab-selected
   entries in a snacks picker / explorer, action in `lua/plugins/snacks.lua`)
-  deploys several at once.
+  deploys several at once. A file going into `icsMaster` is deployed to every
+  server of the repo that has that database (dgsql: datagroup *and* billing/
+  crocus) — `sqltarget.other_servers`; only when the connection came from the
+  rules, not with `!` or an explicit connection name.
 - `lua/config/sqlobject.lua` — `:SqlDef` (`K`), `:SqlRows` (`<leader>dr`),
   `:SqlEnum` (`<leader>de`), `:SqlUsages` (`<leader>du`), `:SqlFile` (`gf`):
   inspect an object in the database, find where a name is used, open the

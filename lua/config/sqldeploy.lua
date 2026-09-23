@@ -54,13 +54,13 @@ local function input_codepage(path)
   return "i:65001"
 end
 
----Имена подключений пачки без повторов — для заголовка окна с ответом.
-local function conn_names(jobs)
+---Имена подключений шагов без повторов — для заголовка окна с ответом.
+local function conn_names(steps)
   local seen, names = {}, {}
-  for _, job in ipairs(jobs) do
-    if not seen[job.conn.name] then
-      seen[job.conn.name] = true
-      names[#names + 1] = job.conn.name
+  for _, step in ipairs(steps) do
+    if not seen[step.conn.name] then
+      seen[step.conn.name] = true
+      names[#names + 1] = step.conn.name
     end
   end
   return names
@@ -70,7 +70,10 @@ end
 ---(маска часто называет их пачкой: 0x3000000 -> DataGroup + ICS_UA97), и объект
 ---должен появиться во всех; файлов больше одного, когда выкладывают выделенное в
 ---пикере (см. M.deploy_files).
----@param jobs { conn: table, databases: string[], file: string, how: string? }[]
+---
+---also — другие серверы для того же файла (icsMaster живёт и на datagroup, и на
+---биллинге, см. sqltarget.other_servers): туда идут те же шаги, только в свои базы.
+---@param jobs { conn: table, databases: string[], file: string, how: string?, also: { conn: table, databases: string[] }[]? }[]
 local function run_jobs(jobs)
   local steps = {}
   for _, job in ipairs(jobs) do
@@ -83,8 +86,10 @@ local function run_jobs(jobs)
         vim.log.levels.ERROR
       )
     end
-    for _, database in ipairs(job.databases) do
-      steps[#steps + 1] = { conn = job.conn, database = database, file = job.file, codepage = codepage }
+    for _, t in ipairs(vim.list_extend({ { conn = job.conn, databases = job.databases } }, job.also or {})) do
+      for _, database in ipairs(t.databases) do
+        steps[#steps + 1] = { conn = t.conn, database = database, file = job.file, codepage = codepage }
+      end
     end
   end
   if #steps == 0 then
@@ -95,8 +100,16 @@ local function run_jobs(jobs)
   local what = single and vim.fn.fnamemodify(jobs[1].file, ":t") or ("файлов: " .. #jobs)
   -- для пачки в заголовке только сервер(ы): базы у каждого файла свои, перечислять
   -- их все — строка, которую никто не прочитает
-  local target_name = single and (jobs[1].conn.name .. " / " .. table.concat(jobs[1].databases, ", "))
-    or table.concat(conn_names(jobs), ", ")
+  local target_name = table.concat(conn_names(steps), ", ")
+  if single then
+    local parts = {}
+    for _, t in ipairs(vim.list_extend({ { conn = jobs[1].conn, databases = jobs[1].databases } }, jobs[1].also or {})) do
+      parts[#parts + 1] = t.conn.name .. " / " .. table.concat(t.databases, ", ")
+    end
+    target_name = table.concat(parts, "; ")
+  end
+  -- серверов несколько — в «не выложилось» база без сервера непонятна: icsMaster на обоих
+  local many_servers = #conn_names(steps) > 1
   -- не разовое уведомление, а живущее до конца выкладки: sqlcmd на большом файле
   -- думает долго, а на нескольких базах ещё и по разу на каждую — без крутилки
   -- между «выкладываю» и «готово» непонятно, идёт что-то или уже нет
@@ -154,7 +167,12 @@ local function run_jobs(jobs)
         return vim.schedule(finish)
       end
       if code ~= 0 then
-        failed[#failed + 1] = (single and "" or name .. " / ") .. cur.database .. " (код " .. code .. ")"
+        failed[#failed + 1] = (single and "" or name .. " / ")
+          .. (many_servers and (cur.conn.name .. "/") or "")
+          .. cur.database
+          .. " (код "
+          .. code
+          .. ")"
       end
       vim.schedule(function()
         step(i + 1)
@@ -168,8 +186,12 @@ local function run_jobs(jobs)
 end
 
 ---Один файл — форма колбэка sqltarget.pick.
-local function run(conn, databases, file, how)
-  run_jobs({ { conn = conn, databases = databases, file = file, how = how } })
+---@param by_rules boolean подключение выбрано правилами — тогда и на другие серверы
+local function runner(by_rules)
+  return function(conn, databases, file, how)
+    local also = by_rules and target.other_servers(file, conn, databases, sql.connections(file)) or {}
+    run_jobs({ { conn = conn, databases = databases, file = file, how = how, also = also } })
+  end
 end
 
 ---@param opts table аргументы команды: [1] — имя подключения, [2] — база;
@@ -198,7 +220,7 @@ function M.deploy(opts)
     prompt = "Выложить " .. vim.fn.fnamemodify(file, ":t") .. " в:",
     hint = ". Можно указать явно: :SqlDeploy <подключение> <база>",
     title = "SqlDeploy",
-  }, run)
+  }, runner(not (opts.bang or opts.fargs[1])))
 end
 
 ---Записывает файл, если он открыт в изменённом буфере: sqlcmd читает диск, и без
@@ -284,7 +306,9 @@ function M.deploy_files(files, opts)
       elseif #dbs == 0 then
         bad[#bad + 1] = name .. ": не определилась база" .. (how and (" (" .. how .. ")") or "")
       else
-        jobs[#jobs + 1] = { conn = conn, databases = dbs, file = file, how = how }
+        -- выбранное руками подключение — только туда, как у :SqlDeploy!
+        local also = not chosen and target.other_servers(file, conn, dbs, list) or {}
+        jobs[#jobs + 1] = { conn = conn, databases = dbs, file = file, how = how, also = also }
       end
     end
     if #bad > 0 then

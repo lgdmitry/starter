@@ -329,6 +329,44 @@ function M.resolve_databases(file, conn, list)
   return db and { db } or {}, how
 end
 
+-- Базы, копия которых живёт на каждом сервере репозитория: в dgsql icsMaster есть и на
+-- datagroup (default), и на биллинге (crocus), и объект из неё должен появиться на обоих.
+-- Сторож и PATH_RULES называют базы, а сервер у файла один, — поэтому отдельно.
+local EVERY_SERVER = { icsmaster = true }
+
+---Другие серверы репозитория, куда тоже надо выложить: из баз файла — те, что есть на
+---каждом сервере (EVERY_SERVER), если на том сервере такая база есть. Только для
+---выкладки по правилам: подключение, выбранное руками, значит «туда и только туда».
+---@return { conn: table, databases: string[] }[]
+function M.other_servers(file, conn, dbs, list)
+  local shared = vim.tbl_filter(function(db)
+    return EVERY_SERVER[db:lower()]
+  end, dbs)
+  local _, root = repo_path(file)
+  local conv = conventions(root)
+  if #shared == 0 or not conv then
+    return {}
+  end
+  local data = read_json(root .. "/" .. (conv.mcpEnvironmentsPath or ".claude/.mcp.environments.json"))
+  local host = (sql.url_parts(conn.url)):lower()
+  local seen, out = { [host] = true }, {}
+  for _, e in ipairs(data and data.environments or {}) do
+    local other = connection_for_server(list, e.server)
+    local other_host = other and (sql.url_parts(other.url)):lower()
+    if other and not seen[other_host] then
+      seen[other_host] = true
+      local here = {}
+      for _, db in ipairs(shared) do
+        here[#here + 1] = server_databases(other)[db:lower()]
+      end
+      if #here > 0 then
+        out[#out + 1] = { conn = other, databases = here }
+      end
+    end
+  end
+  return out
+end
+
 ---Запомнить в b:sqltarget, куда правила ведут этот буфер, — для строки статуса.
 function M.remember(buf, conn, dbs, how)
   vim.b[buf].sqltarget = { conn = conn.name, host = (sql.url_parts(conn.url)), dbs = dbs, how = how }
