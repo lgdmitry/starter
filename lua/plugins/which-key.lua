@@ -8,5 +8,6 @@ return {
     opts.spec = opts.spec or {}
     table.insert(opts.spec, { "<leader>d", group = "sql" })
     table.insert(opts.spec, { "<leader>m", group = "multicursor" })
+    table.insert(opts.spec, { "<leader>y", group = "yank path" })
   end,
 }
