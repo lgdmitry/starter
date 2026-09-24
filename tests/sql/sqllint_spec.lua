@@ -60,8 +60,10 @@ describe("токенные правила", function()
   end)
   it("S29: exists и скобка", function()
     eq(
-      { "1:S29", "3:S29" },
-      found(src({ "if not exists (select 1 from T)", "  return", "if exists", "  (select 1 from T)" }))
+      { "1:S29", "5:S29" },
+      found(
+        src({ "if not exists (select 1 from T)", "begin", "  RETURN -1", "end", "if exists", "  (select 1 from T)" })
+      )
     )
     eq({}, found(src({ "if not exists(", "  select 1", "  from T)" })))
   end)
@@ -169,4 +171,288 @@ describe("позиции", function()
       eq({ 1, 14, 1, 18, "S20: CONVERT() вместо CAST()" }, { d.lnum, d.col, d.end_lnum, d.end_col, d.message })
     end
   )
+end)
+
+---Процедура вокруг тела: структурные правила про «начало / конец процедуры» работают
+---только внутри CREATE PROCEDURE.
+local function proc(body, name)
+  local out = { "CREATE PROCEDURE dbo." .. (name or "em_InsX"), "AS BEGIN" }
+  vim.list_extend(out, body)
+  out[#out + 1] = "END"
+  return table.concat(out, "\n")
+end
+
+describe("структурные правила — уровень HINT", function()
+  it("токенные — WARN, структурные — HINT", function()
+    local d = lint.check({ "set @a = CAST(@b as int)", "if @a = 1", "  set @b = 2" })
+    eq({ "S20", vim.diagnostic.severity.WARN, "S55", vim.diagnostic.severity.HINT }, {
+      d[1].code,
+      d[1].severity,
+      d[2].code,
+      d[2].severity,
+    })
+  end)
+end)
+
+describe("S55: тело if / else в begin … end", function()
+  it("без begin — нарушение, и else if тоже", function()
+    eq(
+      { "1:S55", "3:S55", "3:S55", "5:S55" },
+      found(src({
+        "if @Top is NULL",
+        "  set @Rows = @DefaultPage",
+        "else if @Top <= 0",
+        "  set @Rows = 2147483647",
+        "else",
+        "  set @Rows = @Top",
+      }))
+    )
+  end)
+  it("многострочное условие, case и exists в нём, DROP IF EXISTS — чисто", function()
+    eq(
+      {},
+      found(src({
+        "DROP TABLE IF EXISTS #TmpA",
+        "if (@a = 1 and @b <> 2)",
+        "  or @c =",
+        "    case",
+        "      when @d = 1 then 1",
+        "      else 2",
+        "    end",
+        "begin",
+        "  if not exists(",
+        "    select 1",
+        "    from T",
+        "    where a = @a)",
+        "  begin",
+        "    set @b = 1",
+        "  end else",
+        "  begin",
+        "    set @b = 2",
+        "  end",
+        "end",
+      }))
+    )
+  end)
+end)
+
+describe("S32: один RETURN 0 в конце", function()
+  it("ранний RETURN 0 — нарушение, последний и RETURN -1 — нет", function()
+    eq(
+      { "7:S32" },
+      found(proc({
+        "  if @a is NULL",
+        "  begin",
+        "    RETURN -1",
+        "  end",
+        "  RETURN 0",
+        "  set @b = 1",
+        "  --",
+        "  RETURN 0",
+      }))
+    )
+  end)
+  it("вне процедуры не проверяется", function()
+    eq({}, found(src({ "RETURN 0", "set @b = 1" })))
+  end)
+end)
+
+describe("S9: DROP TABLE IF EXISTS до и после", function()
+  it("нет ни до, ни в конце", function()
+    eq(
+      { "5:S9", "5:S9" },
+      found(proc({ "  DROP TABLE IF EXISTS #Other", "  --", "  CREATE TABLE #TmpA (a int)", "  select a from #TmpA" }))
+    )
+  end)
+  it("до и в конце — чисто; вне процедуры — только «до»", function()
+    eq(
+      {},
+      found(proc({
+        "  DROP TABLE IF EXISTS #TmpA",
+        "  CREATE TABLE #TmpA (a int)",
+        "  select a from #TmpA",
+        "  DROP TABLE IF EXISTS #TmpA",
+      }))
+    )
+    eq({ "1:S9" }, found(src({ "CREATE TABLE #TmpA (a int)", "select a from #TmpA" })))
+  end)
+end)
+
+describe("S7: один declare-блок", function()
+  it("второй declare и две переменные в строке", function()
+    eq(
+      { "5:S7", "7:S7" },
+      found(proc({ "  declare", "     @a int", "    ,@b int, @c int", "  set @a = 1", "  declare @d int" }))
+    )
+  end)
+  it("столбик и table-переменная с колонками в скобках — чисто", function()
+    eq({}, found(proc({ "  declare", "     @a  int", "    ,@t  table (x int, y int)", "  ;", "  set @a = 1" })))
+  end)
+end)
+
+describe("S34 / S51: проверки ошибок", function()
+  it("@@ERROR после вставки во временную таблицу — лишний", function()
+    eq(
+      { "5:S34" },
+      found(src({
+        "insert into #TmpDocs (",
+        "   dcID",
+        ")",
+        "select dcID from T",
+        "if @@ERROR <> 0",
+        "begin",
+        "  RETURN -1",
+        "end",
+      }))
+    )
+  end)
+  it("после insert в постоянную таблицу и после exec — обязателен", function()
+    eq(
+      { "3:S51", "7:S51", "8:S51" },
+      found(proc({
+        "  insert into Docs (",
+        "     dcID",
+        "  )",
+        "  values (@dcID)",
+        "  exec SampleProc",
+        "  exec @ret = SampleProc",
+        "     @Param1 = @a",
+        "  set @a = 1",
+      }))
+    )
+  end)
+  it("правильные проверки — чисто", function()
+    eq(
+      {},
+      found(proc({
+        "  insert into Docs (",
+        "     dcID",
+        "  )",
+        "  values (",
+        "     @dcID",
+        "  )",
+        "  if @@ERROR <> 0",
+        "  begin",
+        "    RAISERROR(60004, 16, 10, 'Docs') WITH SETERROR",
+        "    RETURN -1",
+        "  end",
+        "  exec @ret = SampleProc",
+        "     @Param1 = @a",
+        "  if @@ERROR <> 0 or @ret <> 0",
+        "  begin",
+        "    RAISERROR(60003, 16, 10, 'SampleProc') WITH SETERROR",
+        "    RETURN -1",
+        "  end",
+        "  insert into #TmpA (a)",
+        "  exec @ret = SampleProc",
+        "  if @@ERROR <> 0 or @ret <> 0",
+        "  begin",
+        "    RETURN -1",
+        "  end",
+      }))
+    )
+  end)
+end)
+
+describe("S22: повторный вызов функции", function()
+  it("второй GETDATE() и dbo.em_GetEmIDByLogin() — нарушение", function()
+    eq(
+      { "2:S22", "4:S22" },
+      found(src({
+        "set @CurDate = GETDATE()",
+        "update T set EditAt = getdate()",
+        "set @CurEmID = dbo.em_GetEmIDByLogin()",
+        "set @x = dbo.em_GetEmIDByLogin()",
+      }))
+    )
+  end)
+  it(
+    "NEWID, ROW_NUMBER() over, функции с аргументами, другой батч — чисто",
+    function()
+      eq(
+        {},
+        found(src({
+          "select a = NEWID(), b = NEWID(), n = ROW_NUMBER() over (order by x), m = ROW_NUMBER() over (order by y)",
+          "set @a = ISNULL(@b, 0) + ISNULL(@b, 0)",
+          "set @d = GETDATE()",
+          "GO",
+          "set @d = GETDATE()",
+        }))
+      )
+    end
+  )
+end)
+
+describe("S24: Get не сортирует вывод", function()
+  it("order by выходного набора в Get — нарушение", function()
+    eq({ "7:S24" }, found(proc({ "  select", "     a", "    ,b", "  from T", "  order by a" }, "em_GetX")))
+  end)
+  it("top, over, присваивание, insert … select, не Get — чисто", function()
+    eq(
+      {},
+      found(proc({
+        "  select top 1",
+        "    @id = a",
+        "  from T",
+        "  order by a desc",
+        "  select",
+        "    @id = a",
+        "  from T",
+        "  order by a",
+        "  insert into #TmpA (a)",
+        "  select",
+        "    a",
+        "  from T",
+        "  order by a",
+        "  select",
+        "     a",
+        "    ,n = ROW_NUMBER() over (order by a)",
+        "  from T",
+      }, "em_GetX"))
+    )
+    eq({}, found(proc({ "  select", "    a", "  from T", "  order by a" }, "em_InsX")))
+  end)
+end)
+
+describe("ложные срабатывания с реальных файлов", function()
+  it("S51: insert внутри begin try, exec в msdb — без проверки", function()
+    eq(
+      {},
+      found(proc({
+        "  begin try",
+        "    insert into Docs (dcID)",
+        "    values (@dcID)",
+        "  end try",
+        "  begin catch",
+        "    RETURN -1",
+        "  end catch",
+        "  exec msdb.dbo.sysmail_help_profile_sp",
+      }))
+    )
+  end)
+  it("S32: сторож с DROP PROCEDURE после END — не тело", function()
+    eq(
+      {},
+      found(src({
+        "CREATE PROCEDURE dbo.x",
+        "AS BEGIN",
+        "  RETURN 0",
+        "END",
+        "if not exists(select 1 from T)",
+        "begin",
+        "  DROP PROCEDURE IF EXISTS x",
+        "end",
+        "GO",
+      }))
+    )
+  end)
+  it(
+    "S7: declare @t table — не второй блок, висячая запятая — не две переменные",
+    function()
+      eq({ "4:S7" }, found(proc({ "  declare @a int,", "    @b int, @c int", "  declare @t table (x int)" })))
+    end
+  )
+  it("S22: GETDATE() в DATEDIFF — замер времени", function()
+    eq({}, found(src({ "set @Start = GETDATE()", "set @Sec = DATEDIFF(second, @Start, GETDATE())" })))
+  end)
 end)

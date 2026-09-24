@@ -6,10 +6,13 @@
 -- сообщение о своей строке в них бы утонуло. Новый, ещё не добавленный в git файл —
 -- новый целиком, его проверяем весь.
 --
--- Правила пока только те, что видны по токенам: чтобы их проверить, не нужно ни
--- понимать разметку запроса, ни знать схему базы. То, что форматтер (:SqlFormat) чинит
--- сам — регистр, пробелы, выравнивание, — здесь не проверяется: это делается
--- <leader>df, а не глазами.
+-- Правила двух уровней. Токенные (WARN) видны по самим словам и почти не ошибаются.
+-- Структурные (HINT) смотрят на устройство процедуры — где кончается условие if, какая
+-- инструкция следующая, последний ли это RETURN 0 — и держатся на эвристиках: T-SQL
+-- без точек с запятой по токенам разбирается только приблизительно. Правил, которым
+-- нужна схема базы (FK, DEFAULT, типы колонок), здесь нет. То, что форматтер
+-- (:SqlFormat) чинит сам — регистр, пробелы, выравнивание, — тоже не проверяется: это
+-- делается <leader>df, а не глазами.
 
 local tok = require("config.sqltoken")
 local lower, operand = tok.lower, tok.operand
@@ -53,6 +56,197 @@ local function close_paren(sig, i)
       return j
     end
   end
+end
+
+---Первый ли токен на своей строке (токен до него мог быть многострочным — el).
+local function line_start(sig, i)
+  local p = sig[i - 1]
+  return not p or p.el < sig[i].l
+end
+
+---begin, открывающий блок: "begin" / "try" / "catch" или nil (BEGIN TRAN).
+local function block_begin(sig, i)
+  local nxt = sig[i + 1]
+  if is_word(nxt, "tran", "transaction", "distributed", "dialog", "conversation") then
+    return nil
+  end
+  return is_word(nxt, "try", "catch") and lower(nxt) or "begin"
+end
+
+local function unbracket(s)
+  return (s:gsub("^%[", ""):gsub("%]$", ""))
+end
+
+---Предпроход для структурных правил. Каждому токену: d — глубина скобок, b — номер
+---батча (GO), el — строка конца, in_try — внутри begin try; end — closes (что он
+---закрыл: begin / try / catch / case), else — case_else. Батчу — first / last, proc
+---(имя, если в нём CREATE PROCEDURE) и proc_end — END процедуры: после него в том же
+---батче бывает сторож с DROP PROCEDURE, и он уже не тело.
+local function annotate(sig)
+  local batches, stack, depth, tries, proc_open = { { first = 1 } }, {}, 0, 0, false
+  for _, t in ipairs(sig) do
+    t.el = t.l + select(2, t.s:gsub("\n", ""))
+  end
+  for i, t in ipairs(sig) do
+    local w = lower(t)
+    if t.k == "rparen" then
+      depth = math.max(0, depth - 1)
+    end
+    t.d = depth
+    if t.k == "lparen" then
+      depth = depth + 1
+    end
+    if w == "go" and line_start(sig, i) and not (sig[i + 1] and sig[i + 1].l == t.el) then
+      -- следующий батч: незакрытое до GO дальше не тянется
+      batches[#batches].last = i - 1
+      batches[#batches + 1] = { first = i + 1 }
+      stack, depth, tries, proc_open = {}, 0, 0, false
+    elseif w == "begin" then
+      local kind = block_begin(sig, i)
+      if kind and #stack == 0 and is_word(sig[i - 1], "as") then
+        proc_open = true
+      end
+      stack[#stack + 1] = kind
+      tries = tries + (kind == "try" and 1 or 0)
+    elseif w == "case" then
+      stack[#stack + 1] = "case"
+    elseif w == "end" then
+      t.closes = table.remove(stack)
+      tries = tries - (t.closes == "try" and 1 or 0)
+      if proc_open and #stack == 0 then
+        batches[#batches].proc_end, proc_open = i, false
+      end
+    elseif w == "else" then
+      t.case_else = stack[#stack] == "case"
+    end
+    t.b, t.in_try = #batches, tries > 0
+  end
+  batches[#batches].last = #sig
+  for _, b in ipairs(batches) do
+    for i = b.first, b.last do
+      if is_word(sig[i], "create", "alter") then
+        local j = is_word(sig[i + 1], "or") and i + 3 or i + 1
+        if is_word(sig[j], "proc", "procedure") then
+          local k, name = j + 1, ""
+          while sig[k] and (sig[k].k == "word" or sig[k].k == "ident") do
+            name = unbracket(sig[k].s)
+            if not (sig[k + 1] and sig[k + 1].k == "dot") then
+              break
+            end
+            k = k + 2
+          end
+          b.proc = name
+          break
+        end
+      end
+    end
+  end
+  return { batches = batches }
+end
+
+-- С них на новой строке начинается следующая инструкция. select среди них нет: в
+-- insert … select он — продолжение insert.
+local STMT = tok.set([[
+  insert update delete merge if else while begin end set declare exec execute return
+  raiserror print drop create alter truncate commit rollback break continue goto waitfor
+  throw fetch open close deallocate
+]])
+
+local function stmt_word(sig, j)
+  local w = lower(sig[j])
+  -- if update(col) в триггере — функция, не инструкция
+  return w and STMT[w] and not (w == "update" and sig[j + 1] and sig[j + 1].k == "lparen")
+end
+
+---Начало следующей инструкции после той, что начинается в i (на той же глубине и в
+---том же батче), или nil.
+local function next_statement(sig, i)
+  local d, b = sig[i].d, sig[i].b
+  for j = i + 1, #sig do
+    local s = sig[j]
+    if s.b ~= b or s.d < d then
+      return nil
+    end
+    if s.d == d and line_start(sig, j) and stmt_word(sig, j) then
+      return j
+    end
+  end
+end
+
+---Где кончается условие if в позиции i: индекс первого токена тела. case … end внутри
+---условия пропускается целиком — у него свои else и end.
+local function cond_end(sig, i)
+  local d, b, cases = sig[i].d, sig[i].b, 0
+  for j = i + 1, #sig do
+    local s = sig[j]
+    if s.b ~= b or s.d < d then
+      return nil
+    end
+    if s.d == d then
+      if is_word(s, "case") then
+        cases = cases + 1
+      elseif cases > 0 and is_word(s, "end") then
+        cases = cases - 1
+      elseif cases == 0 and (stmt_word(sig, j) or is_word(s, "select", "with")) then
+        return j
+      end
+    end
+  end
+end
+
+---Есть ли среди токенов a..b переменная name (без учёта регистра).
+local function has_var(sig, a, b, name)
+  name = name:lower()
+  for j = a, b do
+    if sig[j].k == "var" and sig[j].s:lower() == name then
+      return true
+    end
+  end
+  return false
+end
+
+---Условие if в позиции i проверяет @@ERROR (и, если дан, код возврата ret)?
+local function checks_error(sig, i, ret)
+  if not is_word(sig[i], "if") then
+    return false
+  end
+  local e = (cond_end(sig, i) or #sig + 1) - 1
+  return has_var(sig, i + 1, e, "@@error") and (not ret or has_var(sig, i + 1, e, ret))
+end
+
+---Вызов процедуры: exec [@ret =] имя. Возвращает { ret = токен или nil, name = имя
+---строчными, k = индекс после имени } или nil — для exec (@sql), exec @sql, EXECUTE AS,
+---GRANT EXEC ON и системных sp_* / xp_* (у sp_executesql первые параметры позиционные
+---по самому его устройству).
+local function parse_exec(sig, i)
+  if
+    not is_word(sig[i], "exec", "execute")
+    or after_dot(sig, i)
+    or is_word(sig[i - 1], "with")
+    or is_word(sig[i + 1], "on")
+  then
+    return nil
+  end
+  local k, ret = i + 1, nil
+  if sig[k] and sig[k].k == "var" and sig[k + 1] and sig[k + 1].s == "=" then
+    ret, k = sig[k], k + 2
+  end
+  local name, parts = nil, {}
+  while sig[k] and (sig[k].k == "word" or sig[k].k == "ident") and not is_word(sig[k], "as") do
+    name = unbracket(sig[k].s):lower()
+    parts[#parts + 1] = name
+    if sig[k + 1] and sig[k + 1].k == "dot" then
+      k = k + 2
+    else
+      k = k + 1
+      break
+    end
+  end
+  if not name or name:match("^sp_") or name:match("^xp_") then
+    return nil
+  end
+  local db = #parts >= 3 and (parts[1] == "msdb" or parts[1] == "master")
+  return { ret = ret, name = name, k = k, db = db }
 end
 
 local rules = {}
@@ -209,42 +403,24 @@ function rules.case_line(sig, add)
 end
 
 -- S54: begin — отдельной строкой под условием; `end else` — одной строкой.
--- Стек begin/case нужен, чтобы отличить end блока от end у case: `end` вложенного
--- case, а за ним else внешнего case на новой строке — это нормально.
+-- closes из предпрохода отличает end блока от end у case: `end` вложенного case, а за
+-- ним else внешнего case на новой строке — это нормально.
 function rules.begin_end(sig, add)
-  local stack = {}
   for i, t in ipairs(sig) do
-    local w = lower(t)
     local nxt = sig[i + 1]
-    if w == "go" and not (sig[i - 1] and sig[i - 1].l == t.l) then
-      stack = {} -- следующий батч: незакрытое до GO не тянется дальше
-    elseif w == "begin" then
-      if is_word(nxt, "tran", "transaction", "distributed", "dialog", "conversation") then
-        -- BEGIN TRAN — не блок
-      elseif is_word(nxt, "try", "catch") then
-        stack[#stack + 1] = "try"
-      else
-        stack[#stack + 1] = "begin"
-        local p = sig[i - 1]
-        if p and p.l == t.l and not is_word(p, "as") then
-          add(t, "S54", "begin — отдельной строкой под условием")
-        end
+    if is_word(t, "begin") and block_begin(sig, i) == "begin" then
+      local p = sig[i - 1]
+      if p and p.el == t.l and not is_word(p, "as") then
+        add(t, "S54", "begin — отдельной строкой под условием")
       end
-    elseif w == "case" then
-      stack[#stack + 1] = "case"
-    elseif w == "end" then
-      local top = table.remove(stack)
-      if top == "begin" and is_word(nxt, "else") and nxt.l ~= t.l then
-        add(nxt, "S54", "`end else` — одной строкой")
-      end
+    elseif is_word(t, "end") and t.closes == "begin" and is_word(nxt, "else") and nxt.l ~= t.el then
+      add(nxt, "S54", "`end else` — одной строкой")
     end
   end
 end
 
 -- S12: при вызове процедуры — только именованные параметры, каждый на своей строке,
 -- значение — переменная или константа, не выражение (T-SQL такое и не компилирует).
--- Системные sp_* / xp_* не проверяем: у sp_executesql первые параметры позиционные по
--- самому своему устройству.
 local function atom(sig, k)
   local t = sig[k]
   if not t then
@@ -278,30 +454,11 @@ local function arg_start(t, prev)
 end
 
 function rules.exec_params(sig, add)
-  for i, t in ipairs(sig) do
-    -- WITH EXECUTE AS в заголовке и GRANT EXEC ON — не вызовы
-    if
-      is_word(t, "exec", "execute")
-      and not after_dot(sig, i)
-      and not is_word(sig[i - 1], "with")
-      and not is_word(sig[i + 1], "on")
-    then
-      local k = i + 1
-      if sig[k] and sig[k].k == "var" and sig[k + 1] and sig[k + 1].s == "=" then
-        k = k + 2 -- exec @ret = …
-      end
-      local name
-      while sig[k] and (sig[k].k == "word" or sig[k].k == "ident") and not is_word(sig[k], "as") do
-        name = sig[k].s:gsub("^%[", ""):gsub("%]$", ""):lower()
-        if sig[k + 1] and sig[k + 1].k == "dot" then
-          k = k + 2
-        else
-          k = k + 1
-          break
-        end
-      end
-      -- без имени — exec (@sql), exec @sql, execute as: не вызов процедуры
-      if name and not name:match("^sp_") and not name:match("^xp_") then
+  for i in ipairs(sig) do
+    local call = parse_exec(sig, i)
+    if call then
+      local k = call.k
+      do
         local prev_line, first = nil, true
         while arg_start(sig[k], sig[k - 1]) do
           local a = sig[k]
@@ -357,13 +514,298 @@ function rules.exec_params(sig, add)
 end
 
 ---------------------------------------------------------------------------------------
+-- Структурные правила (HINT). Получают ещё ctx из annotate: батчи и процедуры в них.
+
+local STRUCT = tok.set("S7 S9 S22 S24 S32 S34 S51 S55")
+
+---Батчи с процедурой: только к ним относится «в начале / в конце процедуры».
+local function procs(ctx)
+  return vim.tbl_filter(function(b)
+    return b.proc ~= nil
+  end, ctx.batches)
+end
+
+-- S55: тело if / else — всегда в begin … end, и else if тоже: ветка без скобок молча
+-- выпадает из условия, как только к ней допишут вторую строку.
+function rules.if_body(sig, add)
+  for i, t in ipairs(sig) do
+    -- DROP TABLE IF EXISTS #x — не условие: после exists нет скобки
+    local ddl = is_word(sig[i + 1], "exists") and not (sig[i + 2] and sig[i + 2].k == "lparen")
+    if is_word(t, "if") and not ddl then
+      local j = cond_end(sig, i)
+      if j and not (is_word(sig[j], "begin") and block_begin(sig, j)) then
+        add(t, "S55", "тело if — в begin … end, даже из одной инструкции")
+      end
+    elseif is_word(t, "else") and not t.case_else then
+      local n = sig[i + 1]
+      if n and not (is_word(n, "begin") and block_begin(sig, i + 1)) then
+        add(t, "S55", "ветка else — в begin … end (else if — тоже)")
+      end
+    end
+  end
+end
+
+-- S32: успешный выход один — RETURN 0 в самом конце. Ранний RETURN 0 молча обходит
+-- общий хвост (DROP TABLE IF EXISTS, логирование), который добавят в конец.
+function rules.return_zero(sig, add, ctx)
+  for _, b in ipairs(procs(ctx)) do
+    for i = b.first, b.last do
+      local n = sig[i + 1]
+      if is_word(sig[i], "return") and n and n.k == "number" and tonumber(n.s) == 0 then
+        -- последний, если дальше только end-ы до END процедуры
+        local last = true
+        for j = i + 2, b.proc_end or b.last do
+          if not (is_word(sig[j], "end") or sig[j].k == "semi") then
+            last = false
+            break
+          end
+        end
+        if not last then
+          add(
+            sig[i],
+            "S32",
+            "успешный выход один — RETURN 0 в конце; здесь — обратить условие",
+            n
+          )
+        end
+      end
+    end
+  end
+end
+
+-- S9: DROP TABLE IF EXISTS перед каждым CREATE TABLE #… и в конце процедуры.
+function rules.temp_drop(sig, add, ctx)
+  for _, b in ipairs(ctx.batches) do
+    local creates, drops, last_ref = {}, {}, {}
+    for i = b.first, b.last do
+      local t = sig[i]
+      if t.k == "temp" then
+        local name = t.s:lower()
+        last_ref[name] = i
+        if is_word(sig[i - 1], "table") and is_word(sig[i - 2], "create") then
+          creates[#creates + 1] = { i = i, name = name, at = sig[i - 2] }
+        elseif is_word(sig[i - 1], "exists") and is_word(sig[i - 2], "if") and is_word(sig[i - 3], "table") then
+          drops[name] = drops[name] or {}
+          table.insert(drops[name], i)
+        elseif is_word(sig[i - 1], "table") and is_word(sig[i - 2], "drop") then
+          drops[name] = drops[name] or {}
+          table.insert(drops[name], -i) -- DROP без IF EXISTS: годится только в конце
+        end
+      end
+    end
+    for _, c in ipairs(creates) do
+      local before, at_end = false, false
+      for _, d in ipairs(drops[c.name] or {}) do
+        before = before or (d > 0 and d < c.i)
+        at_end = at_end or math.abs(d) == last_ref[c.name]
+      end
+      if not before then
+        add(c.at, "S9", ("перед CREATE TABLE — DROP TABLE IF EXISTS %s"):format(sig[c.i].s), sig[c.i])
+      end
+      if b.proc and not at_end then
+        add(c.at, "S9", ("в конце процедуры — DROP TABLE IF EXISTS %s"):format(sig[c.i].s), sig[c.i])
+      end
+    end
+  end
+end
+
+-- S7: один блок declare в начале процедуры, одна переменная — одна строка.
+function rules.declare_block(sig, add, ctx)
+  for _, b in ipairs(procs(ctx)) do
+    local seen = false
+    for i = b.first, b.last do
+      local t = sig[i]
+      -- declare c cursor — курсор, про него S4; declare @t table (…) с другими
+      -- переменными в один declare не объединить — это не второй блок
+      local n = sig[i + 1]
+      local table_var = n and n.k == "var" and is_word(sig[i + 2], "table")
+      if is_word(t, "declare") and line_start(sig, i) and not (n and n.k == "word") and not table_var then
+        if seen then
+          add(t, "S7", "один блок declare — в начале процедуры")
+        end
+        seen = true
+        -- в пределах блока: строки начинаются с запятой или с переменной
+        local j = i + 1
+        while j <= b.last do
+          local s = sig[j]
+          if s.d == t.d and line_start(sig, j) and j > i + 1 and s.k ~= "comma" and sig[j - 1].k ~= "comma" then
+            break
+          end
+          -- висячая запятая в конце строки — это S2, дело форматтера
+          local v = sig[j + 1]
+          if s.d == t.d and s.k == "comma" and not line_start(sig, j) and v and v.k == "var" and v.l == s.el then
+            add(sig[j + 1], "S7", "одна переменная — одна строка")
+          end
+          j = j + 1
+        end
+      end
+    end
+  end
+end
+
+-- S34 / S51: после insert — во временную таблицу @@ERROR не проверяют, в постоянную
+-- (в процедуре) — проверяют обязательно; после вызова процедуры — exec @ret = … и
+-- if @@ERROR <> 0 or @ret <> 0.
+function rules.error_checks(sig, add, ctx)
+  for i, t in ipairs(sig) do
+    local b = ctx.batches[t.b]
+    if is_word(t, "insert") and not after_dot(sig, i) then
+      local target = is_word(sig[i + 1], "into") and sig[i + 2] or sig[i + 1]
+      local j = next_statement(sig, i)
+      -- insert … exec проверяется как вызов процедуры
+      local via_exec = false
+      for k = i + 1, (j or b.last + 1) - 1 do
+        if sig[k].d == t.d and is_word(sig[k], "exec", "execute") then
+          via_exec = true
+        end
+      end
+      local checked = j and checks_error(sig, j)
+      if not target or via_exec or target.k == "lparen" or is_word(target, "values", "default") then
+        -- insert в merge — без имени таблицы
+      elseif target.k == "temp" or target.k == "var" then
+        if checked then
+          add(
+            sig[j],
+            "S34",
+            "после вставки во временную таблицу @@ERROR не проверяется"
+          )
+        end
+      elseif b.proc and not checked and not t.in_try then
+        add(
+          t,
+          "S51",
+          "после insert в постоянную таблицу — if @@ERROR <> 0 с RAISERROR(60004, …)"
+        )
+      end
+    elseif b.proc then
+      local call = parse_exec(sig, i)
+      if call and call.db then
+        -- msdb.dbo.sysmail_… — системное, не наш код возврата
+      elseif call and not call.ret then
+        add(
+          t,
+          "S51",
+          "exec @ret = …: без кода возврата ошибку процедуры не проверить"
+        )
+      elseif call then
+        local j = next_statement(sig, i)
+        if not (j and checks_error(sig, j, call.ret.s)) then
+          add(
+            t,
+            "S51",
+            ("после вызова — if @@ERROR <> 0 or %s <> 0 с RAISERROR(60003, …)"):format(call.ret.s)
+          )
+        end
+      end
+    end
+  end
+end
+
+-- S22: не повторять вызов функции — значение один раз в переменную. Только вызовы без
+-- аргументов (GETDATE(), dbo.em_GetEmIDByLogin()): с аргументами это чаще разные
+-- вычисления. Функции, которые обязаны давать новое значение на каждый вызов или
+-- зависят от места (NEWID, SCOPE_IDENTITY, ERROR_*), и оконные (… over) — не в счёт.
+local VOLATILE = tok.set([[
+  newid newsequentialid rand scope_identity xact_state rowcount_big error_message
+  error_number error_line error_procedure error_severity error_state row_number rank
+  dense_rank cume_dist percent_rank
+]])
+
+function rules.repeated_call(sig, add, ctx)
+  for _, b in ipairs(ctx.batches) do
+    local seen = {}
+    for i = b.first, b.last do
+      local t = sig[i]
+      local l, r = sig[i + 1], sig[i + 2]
+      if (t.k == "word" or t.k == "ident") and l and l.k == "lparen" and r and r.k == "rparen" then
+        local a = i
+        while sig[a - 1] and sig[a - 1].k == "dot" and sig[a - 2] do
+          a = a - 2
+        end
+        local parts, shown = {}, {}
+        for k = a, i, 2 do
+          parts[#parts + 1] = unbracket(sig[k].s):lower()
+          shown[#shown + 1] = sig[k].s
+        end
+        local key = table.concat(parts, ".")
+        local header = is_word(sig[a - 1], "function", "procedure", "proc")
+        -- DATEDIFF(second, @Start, GETDATE()) — замер времени: там нужен именно новый вызов
+        local timing = false
+        if sig[a - 1] and sig[a - 1].k == "comma" and sig[a].d > 0 then
+          local o = a - 1
+          while o > 1 and sig[o].d >= sig[a].d do
+            o = o - 1
+          end
+          timing = is_word(sig[o - 1], "datediff", "datediff_big")
+        end
+        if not header and not timing and not VOLATILE[parts[#parts]] and not is_word(sig[i + 3], "over") then
+          if seen[key] then
+            local what = table.concat(shown, ".") .. "()"
+            add(
+              sig[a],
+              "S22",
+              what
+                .. " уже вызывался выше: значение — один раз в переменную",
+              r
+            )
+          end
+          seen[key] = true
+        end
+      end
+    end
+  end
+end
+
+-- S24: Get-процедура не сортирует выходной набор — сортирует форма. order by в top,
+-- в over (…), within group (…), в присваивании переменным и в insert … select — не
+-- выходной набор.
+function rules.get_order(sig, add, ctx)
+  for _, b in ipairs(procs(ctx)) do
+    if b.proc:lower():find("_get") or b.proc:lower():find("^get") then
+      for i = b.first, b.last do
+        local t = sig[i]
+        if is_word(t, "order") and is_word(sig[i + 1], "by") and t.d == 0 then
+          -- владелец — ближайший select той же глубины
+          local s = i - 1
+          while s >= b.first and not (sig[s].d == t.d and is_word(sig[s], "select")) do
+            s = s - 1
+          end
+          local own = s >= b.first and sig[s]
+          local n = own and sig[s + 1]
+          local assign = n and n.k == "var" and sig[s + 2] and sig[s + 2].s == "="
+          local into = false
+          for k = s + 1, i - 1 do
+            into = into or (sig[k].d == t.d and is_word(sig[k], "into"))
+          end
+          -- инструкция, которой принадлежит select: insert … select — не вывод
+          local p = s - 1
+          while p >= b.first and not (sig[p].d == t.d and line_start(sig, p) and stmt_word(sig, p)) do
+            p = p - 1
+          end
+          local in_insert = p >= b.first and is_word(sig[p], "insert", "declare", "set")
+          if own and not is_word(n, "top") and not assign and not into and not in_insert then
+            add(
+              t,
+              "S24",
+              "Get-процедура не сортирует выходной набор — это делает форма",
+              sig[i + 1]
+            )
+          end
+        end
+      end
+    end
+  end
+end
+
+---------------------------------------------------------------------------------------
 
 ---Найти нарушения в тексте. Строки и колонки — с 0, как у vim.diagnostic.
 ---@param lines string[]
----@return { lnum: integer, col: integer, end_lnum: integer, end_col: integer, code: string, message: string }[]
+---@return { lnum: integer, col: integer, end_lnum: integer, end_col: integer, code: string, message: string, severity: integer }[]
 function M.check(lines)
   local recs = tok.tokenize(table.concat(lines, "\n"), 4)
   local sig = tok.flatten(recs)
+  local ctx = annotate(sig)
   local out = {}
   local function add(t, code, msg, last)
     last = last or t
@@ -376,6 +818,7 @@ function M.check(lines)
       end_col = (nl > 0 and 0 or last.c) + #tail,
       code = code,
       message = code .. ": " .. msg,
+      severity = STRUCT[code] and vim.diagnostic.severity.HINT or vim.diagnostic.severity.WARN,
     }
   end
   -- S1 — по сырым табам, в sp они уже раскрыты. Одна находка на строку.
@@ -391,7 +834,7 @@ function M.check(lines)
     end
   end
   for _, rule in pairs(rules) do
-    rule(sig, add)
+    rule(sig, add, ctx)
   end
   table.sort(out, function(a, b)
     if a.lnum ~= b.lnum then
@@ -464,7 +907,6 @@ function M.lint(buf)
   local diags = {}
   for _, d in ipairs(M.check(vim.api.nvim_buf_get_lines(buf, 0, -1, false))) do
     if lines_set == true or lines_set[d.lnum + 1] then
-      d.severity = vim.diagnostic.severity.WARN
       d.source = "sqllint"
       diags[#diags + 1] = d
     end

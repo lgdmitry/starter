@@ -119,9 +119,14 @@ Not a plugin — own code on top of vim-dadbod, wired up from
   lines changed vs git — gitsigns hunks, re-run on `User GitSignsUpdate`; a
   file not yet added to git counts as new entirely (gitsigns doesn't attach
   to untracked files, so `git ls-files` is asked once per buffer). `:SqlLint!`
-  switches the buffer to the whole file, `:SqlLint` back. Token-level rules
-  only (S1, S3, S4, S8, S12, S20, S29, S33, S42, S43, S52, S54); what
-  `:SqlFormat` fixes by itself (case, spacing, alignment) is not reported.
+  switches the buffer to the whole file, `:SqlLint` back. Token rules are
+  WARN (S1, S3, S4, S8, S12, S20, S29, S33, S42, S43, S52, S54); structural
+  ones are HINT (S7, S9, S22, S24, S32, S34, S51, S55) — heuristics over a
+  pre-pass (`annotate`: paren depth, GO batches, the procedure and its END,
+  begin/try/case stack), since T-SQL without semicolons only parses roughly
+  from tokens. Rules that need the schema (FK, DEFAULT, column types) are
+  out of scope. What `:SqlFormat` fixes by itself (case, spacing,
+  alignment) is not reported.
   The tokenizer and word lists are shared with the formatter in
   `lua/config/sqltoken.lua`.
 - `lua/config/sqlcomplete.lua` — sets `b:db` in ordinary `.sql` files (on the
