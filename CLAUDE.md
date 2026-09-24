@@ -131,6 +131,14 @@ Not a plugin — own code on top of vim-dadbod, wired up from
   a WARN `SqlFormat: … → <how it should look>` — so the two can't diverge.
   The tokenizer and word lists are shared with the formatter in
   `lua/config/sqltoken.lua`.
+- `lua/config/sqlindent.lua` — `indentexpr` for sql buffers, set from
+  `indent/sql.lua` (config dir is ahead of `$VIMRUNTIME` in rtp, and
+  `LazyVim.set_default` doesn't override an option set outside `$VIMRUNTIME`).
+  Treesitter's sql `indents.scm` gives 0 for almost every T-SQL line and the
+  runtime `indent/sql.vim` is for another dialect. Keeps the previous line's
+  indent; +2 after `begin`/`(`; +3 after a lone `select`/`declare` and a
+  procedure header; `end`/`)`/`AS`/`from`/`where`/leading comma snap to their
+  pair when typed (`indentkeys`; a comma there is `0\,`, `0<,>` doesn't work).
 - `lua/config/sqlcomplete.lua` — sets `b:db` in ordinary `.sql` files (on the
   first `InsertEnter`, by the `sqltarget` rules, never prompting), so that
   vim-dadbod-completion completes tables and columns by alias there too —
