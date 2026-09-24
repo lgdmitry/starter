@@ -101,6 +101,19 @@ Not a plugin — own code on top of vim-dadbod, wired up from
 - `lua/config/sqlquery.lua` — `:SqlQuery` (`<leader>dq`): a scratch query
   buffer bound to the connection and database of the current file;
   `:SqlRun` (`<leader>dx`) runs it, or the visual selection in any sql buffer.
+- `lua/config/sqlformat.lua` — `:SqlFormat` (`<leader>df`, operator in normal
+  mode, selection in visual; sql buffers only): format T-SQL by the dgsql/esql
+  standard (skill `mssql-repo-skills:sql-standards`, `tsql-style.md`). Only the
+  range, never the whole file on save — the standard applies to new/changed
+  lines. Token level strictly inside the range (case per §13, operator/comma/
+  bracket spacing, `exists(`, full date parts); block level (leading commas and
+  their indent from the introducing line, aligned `=`, type/NULL/comment
+  columns) for every block the range touches. Columns come from the rules
+  alone (longest element), not from how neighbouring legacy lines are aligned.
+  Does not re-layout statements (clauses, `case`, `begin`/`end`). Line count
+  never changes. `sqlfluff` from the `lang.sql` extra is removed entirely
+  (mason, nvim-lint, conform — `lua/plugins/dadbod.lua`): as a format-on-save
+  formatter it rewrote whole legacy files.
 - `lua/config/sqlcomplete.lua` — sets `b:db` in ordinary `.sql` files (on the
   first `InsertEnter`, by the `sqltarget` rules, never prompting), so that
   vim-dadbod-completion completes tables and columns by alias there too —

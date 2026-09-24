@@ -6,7 +6,7 @@
 -- Иконки задаём явно: which-key подбирает их по правилам на английские слова в описании
 -- ("debug", "file", ...), а у наших маппингов описания русские. Сами маппинги заданы в
 -- других местах, здесь только иконки к ним. real = true: без него which-key показывал бы
--- пункт и там, где маппинга нет, — а часть из них буферные (K/gf в sql, <leader>dx в
+-- пункт и там, где маппинга нет, — а часть из них буферные (K/gf/<leader>df в sql, <leader>dx в
 -- буфере запроса, <leader>mx только при нескольких курсорах).
 local function icon(glyph, color)
   return { icon = glyph, color = color }
@@ -32,6 +32,7 @@ return {
       { "<leader>dU", icon = icon("󰍉", "green") },
       { "<leader>dc", icon = icon("󰓛", "red") },
       { "<leader>di", icon = icon("󰋼", "cyan") },
+      { "<leader>df", icon = icon("󰉼", "yellow") },
       { "gK", icon = icon("󰅩", "azure") },
       { "gf", icon = icon("󰈮", "cyan") },
 

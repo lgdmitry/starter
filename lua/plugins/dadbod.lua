@@ -20,6 +20,7 @@
 --   :SqlQuery (<leader>dq), :SqlRun (<leader>dx) — разовый запрос рядом с процедурой
 --   :SqlWhere (<leader>di), :SqlCacheClear — куда пойдут команды, забыть кэши правил
 --   :SqlCancel (<leader>dc) — прервать выполняющийся sqlcmd (запросы асинхронные)
+--   :SqlFormat (<leader>df) — форматировать диапазон по стандарту dgsql/esql
 --   config.sqlcomplete — b:db для дополнения из базы в обычных .sql файлах
 -- Спеки — tests/sql/, запуск описан в tests/run.lua.
 require("config.sqlconn").setup()
@@ -28,8 +29,45 @@ require("config.sqldeploy").setup()
 require("config.sqlobject").setup()
 require("config.sqlquery").setup()
 require("config.sqlcomplete").setup()
+require("config.sqlformat").setup()
+
+-- sqlfluff из extra lang.sql убран целиком. Форматтером (conform, автоформат при
+-- сохранении) он переписывал весь файл, а стандарт dgsql/esql применяется только к
+-- новым и изменённым строкам — для этого есть :SqlFormat (config.sqlformat). Линтером
+-- с --dialect=ansi он на T-SQL давал сплошной шум, а правил стандарта всё равно не знает.
+local sql_ft = { "sql", "mysql", "plsql" }
+local function without_sqlfluff(list)
+  return vim.tbl_filter(function(name)
+    return name ~= "sqlfluff"
+  end, list or {})
+end
 
 return {
+  {
+    "mason-org/mason.nvim",
+    opts = function(_, opts)
+      opts.ensure_installed = without_sqlfluff(opts.ensure_installed)
+    end,
+  },
+  {
+    "mfussenegger/nvim-lint",
+    optional = true,
+    opts = function(_, opts)
+      for _, ft in ipairs(sql_ft) do
+        opts.linters_by_ft[ft] = without_sqlfluff(opts.linters_by_ft[ft])
+      end
+    end,
+  },
+  {
+    "stevearc/conform.nvim",
+    optional = true,
+    opts = function(_, opts)
+      opts.formatters.sqlfluff = nil
+      for _, ft in ipairs(sql_ft) do
+        opts.formatters_by_ft[ft] = without_sqlfluff(opts.formatters_by_ft[ft])
+      end
+    end,
+  },
   {
     "kristijanhusak/vim-dadbod-ui",
     optional = true,
