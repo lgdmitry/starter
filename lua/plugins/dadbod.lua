@@ -21,6 +21,7 @@
 --   :SqlWhere (<leader>di), :SqlCacheClear — куда пойдут команды, забыть кэши правил
 --   :SqlCancel (<leader>dc) — прервать выполняющийся sqlcmd (запросы асинхронные)
 --   :SqlFormat (<leader>df) — форматировать диапазон по стандарту dgsql/esql
+--   :SqlLint — диагностика по тому же стандарту на изменённых строках (! — весь файл)
 --   config.sqlcomplete — b:db для дополнения из базы в обычных .sql файлах
 -- Спеки — tests/sql/, запуск описан в tests/run.lua.
 require("config.sqlconn").setup()
@@ -30,6 +31,7 @@ require("config.sqlobject").setup()
 require("config.sqlquery").setup()
 require("config.sqlcomplete").setup()
 require("config.sqlformat").setup()
+require("config.sqllint").setup()
 
 -- sqlfluff из extra lang.sql убран целиком. Форматтером (conform, автоформат при
 -- сохранении) он переписывал весь файл, а стандарт dgsql/esql применяется только к

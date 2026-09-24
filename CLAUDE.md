@@ -114,6 +114,16 @@ Not a plugin — own code on top of vim-dadbod, wired up from
   never changes. `sqlfluff` from the `lang.sql` extra is removed entirely
   (mason, nvim-lint, conform — `lua/plugins/dadbod.lua`): as a format-on-save
   formatter it rewrote whole legacy files.
+- `lua/config/sqllint.lua` — `:SqlLint`: `vim.diagnostic` (source `sqllint`,
+  message starts with the rule anchor `S20: …`) by the same standard, only on
+  lines changed vs git — gitsigns hunks, re-run on `User GitSignsUpdate`; a
+  file not yet added to git counts as new entirely (gitsigns doesn't attach
+  to untracked files, so `git ls-files` is asked once per buffer). `:SqlLint!`
+  switches the buffer to the whole file, `:SqlLint` back. Token-level rules
+  only (S1, S3, S4, S8, S12, S20, S29, S33, S42, S43, S52, S54); what
+  `:SqlFormat` fixes by itself (case, spacing, alignment) is not reported.
+  The tokenizer and word lists are shared with the formatter in
+  `lua/config/sqltoken.lua`.
 - `lua/config/sqlcomplete.lua` — sets `b:db` in ordinary `.sql` files (on the
   first `InsertEnter`, by the `sqltarget` rules, never prompting), so that
   vim-dadbod-completion completes tables and columns by alias there too —
