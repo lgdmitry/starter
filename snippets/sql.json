@@ -1,12 +1,21 @@
 {
   "use": {
     "prefix": "use",
-    "body": ["use ${1:DBName}", "go", "", "$0"],
+    "body": [
+      "use ${1:DBName}",
+      "go",
+      "",
+      "$0"
+    ],
     "description": "use <database>"
   },
   "select": {
     "prefix": "sel",
-    "body": ["select ${2:*}", "from ${1:Document}", "$0"],
+    "body": [
+      "select ${2:*}",
+      "from ${1:Document}",
+      "$0"
+    ],
     "description": "select ... from"
   },
   "select document": {
@@ -14,7 +23,7 @@
     "body": [
       "select",
       "   @dcNo     = dcNo",
-      "  ,@dcDateV  = CONVERT(varchar(10),dcDate,104)",
+      "  ,@dcDateV  = CONVERT(varchar(10), dcDate, 104)",
       "from Document",
       "where dcID = @dcID",
       "$0"
@@ -23,22 +32,30 @@
   },
   "where": {
     "prefix": "wh",
-    "body": ["where ${1:t1}.${2:colname} = ${3:Value}"],
+    "body": [
+      "where ${1:t1}.${2:colname} = ${3:Value}"
+    ],
     "description": "where"
   },
   "inner join": {
     "prefix": "jo",
-    "body": ["inner join ${1:Table2} ${2:s} on ${2:s}.${3:skey} = ${4:t}.${3:skey}"],
+    "body": [
+      "inner join ${1:Table2} ${2:s} on ${2:s}.${3:skey} = ${4:t}.${3:skey}"
+    ],
     "description": "inner join on the same key name"
   },
   "left join": {
     "prefix": "ljo",
-    "body": ["left outer join ${1:Table2} ${2:s} on ${2:s}.${3:skey} = ${4:t}.${3:skey}"],
+    "body": [
+      "left outer join ${1:Table2} ${2:s} on ${2:s}.${3:skey} = ${4:t}.${3:skey}"
+    ],
     "description": "left outer join on the same key name"
   },
   "left join with explicit key": {
     "prefix": "ljo2",
-    "body": ["left outer join ${1:Table2} ${2:s} on ${2:s}.${3:skey} = ${5:t1}.${4:t1key}"],
+    "body": [
+      "left outer join ${1:Table2} ${2:s} on ${2:s}.${3:skey} = ${5:t1}.${4:t1key}"
+    ],
     "description": "left outer join, both sides named explicitly"
   },
   "exists": {
@@ -52,7 +69,11 @@
   },
   "add column": {
     "prefix": "add",
-    "body": ["ALTER TABLE ${1:Table} ADD ${2:ColName} ${3:type}", "GO", "$0"],
+    "body": [
+      "ALTER TABLE ${1:Table} ADD ${2:ColName} ${3:type}",
+      "GO",
+      "$0"
+    ],
     "description": "alter table add column"
   },
   "create index": {
@@ -67,7 +88,9 @@
   },
   "drop if object exists": {
     "prefix": "ifobj",
-    "body": ["if OBJECT_ID('${1:this}','${2:P}') is NOT NULL DROP ${3:PROCEDURE} ${1:this}$0"],
+    "body": [
+      "if OBJECT_ID('${1:this}','${2:P}') is NOT NULL DROP ${3:PROCEDURE} ${1:this}$0"
+    ],
     "description": "drop the object if it exists"
   },
   "scalar function": {
@@ -130,7 +153,7 @@
       "  ${3:@id} = ${3:@id}",
       "if ${2:@RetCode} != 0 or @@ERROR != 0",
       "begin",
-      "  RAISERROR(60003,16,10,'${1:PocedureName}') WITH SETERROR;",
+      "  RAISERROR(60003, 16, 10, '${1:PocedureName}') WITH SETERROR;",
       "  RETURN -1;",
       "end;$0"
     ],
@@ -138,29 +161,33 @@
   },
   "raiserror": {
     "prefix": "raise",
-    "body": ["RAISERROR(${1:60003},16,10,'${2}') WITH SETERROR;", "RETURN -1;$0"],
+    "body": [
+      "RAISERROR(${1:60003}, 16, 10,'${2}') WITH SETERROR;",
+      "RETURN -1;$0"
+    ],
     "description": "raiserror + return -1"
   },
   "while": {
     "prefix": "while",
     "body": [
-      "set @n = (select COUNT(*) from ${1:tblName})",
-      "set @i = 0",
-      "while @i < @n",
+      "set @n = (select MAX($2) from ${1:tblName})",
+      "while @n > -1",
       "begin",
       "  select",
       "    $0",
       "  from ${1:tblName}",
-      "  where i = @i",
+      "  where $2 = @n",
       "  --",
-      "  set @i += 1",
+      "  set @n -= 1",
       "end;"
     ],
     "description": "loop over a numbered table"
   },
   "execute as": {
     "prefix": "execas",
-    "body": ["execute as login = 'icscorp\\\\pesotskiydmi'"],
+    "body": [
+      "execute as login = 'icscorp\\\\pesotskiydmi'"
+    ],
     "description": "execute as dmitry"
   },
   "find text in modules": {
@@ -192,7 +219,13 @@
   },
   "find message": {
     "prefix": "fim",
-    "body": ["select message_id,text", "from sys.messages", "where text like '%${1:text}%'", "GO", "$0"],
+    "body": [
+      "select message_id,text",
+      "from sys.messages",
+      "where text like '%${1:text}%'",
+      "GO",
+      "$0"
+    ],
     "description": "find the message in sys.messages"
   }
 }
