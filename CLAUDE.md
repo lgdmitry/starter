@@ -114,7 +114,10 @@ Target server and databases are resolved by `sqltarget` from the repo's
 `.claude/repo-conventions.json` (the same rules the `deploy-commit` skill
 uses): server by the top folder's environment, address from
 `.mcp.environments.json`; databases from the file's own `usBases ... OptionsDB`
-guard if present, otherwise by path rules. Without `repo-conventions.json`
+guard if present, otherwise by path rules; files under `Alter/**` take them only
+from their first line (`-- ua` / `master` / `buh` / `crocus` / `dev` / `DUP_Old_Data`,
+comma-separated),
+an unknown name refuses rather than falling back. Without `repo-conventions.json`
 there are fallback rules (dev connection by name/host, database from the first
 path folder or the URL). Login/password always come from the matching
 `DB_UI_*` connection in the project's `.env` (read by `tpope/vim-dotenv`),

@@ -9,7 +9,8 @@
 --   базы   — из «сторожа» самого файла, если он там есть (usBases ... OptionsDB & 0x…
 --            рядом с DROP — так объект сам говорит, в каких базах он должен жить;
 --            маска часто даёт несколько баз: 0x3000000 -> datagroup + ics_ua97),
---            иначе по пути внутри репозитория — см. PATH_RULES ниже.
+--            иначе по пути внутри репозитория — см. PATH_RULES ниже; в Alter/** —
+--            только по первой строке файла («-- buh»), см. ALTER_BASES.
 -- Реестр usBases всегда читается с сервера окружения default: он там один на всех,
 -- даже когда сам файл уезжает на другой сервер.
 --
@@ -218,6 +219,92 @@ local function database_by_rules(file, conn)
     )
 end
 
+-- Alter/** — разовые скрипты, а не объекты: ни сторожа, ни папки базы у них нет, база
+-- записана первой строкой, комментарием: «-- buh», «--ua», «-- icsMaster». Имён может
+-- быть несколько через запятую — выкладывается во все. Как и в PATH_RULES, databases —
+-- варианты одной базы для разных репозиториев (buh — datagroup в dgsql, icsZao в esql).
+local ALTER_BASES = {
+  ua = { databases = { "ics_ua97" } },
+  ics_ua97 = { databases = { "ics_ua97" } },
+  master = { databases = { "icsMaster" } },
+  icsmaster = { databases = { "icsMaster" } },
+  buh = { databases = { "datagroup", "icsZao" } },
+  datagroup = { databases = { "datagroup", "icsZao" } },
+  icszao = { databases = { "datagroup", "icsZao" } },
+  crocus = { databases = { "Crocus" }, environment = "crocus" },
+  dev = { databases = { "DEV_NEW" } },
+  dev_new = { databases = { "DEV_NEW" } },
+  dup_old_data = { databases = { "DUP_Old_Data" } },
+}
+
+local ALTER_HINT =
+  "первой строкой Alter-файла должна быть база: -- ua / master / buh / crocus / dev / DUP_Old_Data"
+
+---Базы из первой строки файла в Alter/**.
+---Незнакомое имя — отказ целиком, а не «выложить в те, что узнали»: разовый скрипт,
+---выкладка которого пропустила базу, найдётся не скоро. Отказ же и тогда, когда первая
+---строка — закомментированный код («--select * from …»): это тоже не база.
+---@return { header: string, groups: { databases: string[] }[], environment: string? }|false|nil rule
+---nil — файл не из Alter/**; false — из Alter/**, но базы в первой строке нет
+---@return string? why
+local function alter_rule(file)
+  local rel = repo_path(file)
+  if not (rel and rel:match("^alter/")) then
+    return nil
+  end
+  local line = sql.read_file(file):gsub("^\239\187\191", ""):match("^[^\r\n]*")
+  local names = line:match("^%s*%-%-(.*)$")
+  if not names then
+    return false, ALTER_HINT
+  end
+  local rule = { header = vim.trim(line), groups = {} }
+  for name in names:gmatch("[^,%s]+") do
+    local base = ALTER_BASES[name:lower()]
+    if not base then
+      return false, ("«%s» — не база; %s"):format(name, ALTER_HINT)
+    end
+    rule.groups[#rule.groups + 1] = base
+    rule.environment = rule.environment or base.environment
+  end
+  if #rule.groups == 0 then
+    return false, ALTER_HINT
+  end
+  return rule
+end
+
+---Базы Alter-файла на этом сервере: для каждого имени — тот вариант, что на нём есть.
+---@return string[]|false|nil databases nil — файл не из Alter/**; false — базы нет
+---@return string? how
+local function database_by_alter(file, conn)
+  local rule, why = alter_rule(file)
+  if rule == nil then
+    return nil
+  end
+  if not rule then
+    return false, why
+  end
+  local dbs, seen = {}, {}
+  for _, group in ipairs(rule.groups) do
+    local exact
+    for _, name in ipairs(group.databases) do
+      exact = exact or server_databases(conn)[name:lower()]
+    end
+    if not exact then
+      return false,
+        ("для «%s» нужна база %s, а на %s её нет"):format(
+          rule.header,
+          table.concat(group.databases, " или "),
+          conn.name
+        )
+    end
+    if not seen[exact:lower()] then
+      seen[exact:lower()] = true
+      dbs[#dbs + 1] = exact
+    end
+  end
+  return dbs, "по первой строке «" .. rule.header .. "»"
+end
+
 ---Запасное правило: первая папка пути, если такая база есть на сервере, иначе база из URL.
 local function database_by_path(file, conn)
   local first = repo_folder(file)
@@ -283,10 +370,13 @@ function M.resolve_connection(file, list)
   if conv then
     local rules = folder_rules(conv, first)
     local by_path = path_rule(file)
-    -- по очереди: правило репозитория, своё правило по пути, окружение по умолчанию;
-    -- окружения из PATH_RULES в этом репозитории может не быть — тогда дальше
+    local alter = alter_rule(file)
+    -- по очереди: правило репозитория, первая строка Alter-файла, своё правило по пути,
+    -- окружение по умолчанию; окружения из ALTER_BASES/PATH_RULES в этом репозитории
+    -- может не быть — тогда дальше
     for _, env in ipairs({
       (rules and rules.environment) or false,
+      (alter and alter.environment) or false,
       (by_path and by_path.environment) or false,
       conv.defaultServerEnvironment or false,
     }) do
@@ -299,10 +389,15 @@ function M.resolve_connection(file, list)
   return connection_by_name(file, list)
 end
 
----Базы для файла: сторож самого файла (он же даёт мультидеплой), иначе правило по
----пути, иначе запасное правило по папке/URL.
+---Базы для файла: первая строка Alter-файла, иначе сторож самого файла (он же даёт
+---мультидеплой), иначе правило по пути, иначе запасное правило по папке/URL.
 ---@return string[] databases, string? how откуда они взялись или почему их нет — для сообщения
 function M.resolve_databases(file, conn, list)
+  -- Alter/** решает только первая строка: без неё — отказ, а не база из URL
+  local alter, alter_how = database_by_alter(file, conn)
+  if alter ~= nil then
+    return alter or {}, alter_how
+  end
   local mask = guard_mask(file)
   if mask then
     local _, root = repo_path(file)

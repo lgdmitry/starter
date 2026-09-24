@@ -7,7 +7,7 @@ local M = {}
 
 M.SERVERS = {
   dgsql = {
-    dbs = { "datagroup", "ics_ua97", "icsMaster", "DEV_NEW", "icsFiles" },
+    dbs = { "datagroup", "ics_ua97", "icsMaster", "DEV_NEW", "icsFiles", "DUP_Old_Data" },
     usbases = { datagroup = 0x1000000, ics_ua97 = 0x2000000, DEV_NEW = 0x4000000 },
   },
   crocus = { dbs = { "Crocus", "ServiceControle", "icsMaster" } },
@@ -54,6 +54,14 @@ M.ROOT = t.repo({
     ["Crocus/copied_PRC.sql"] = M.GUARD:format("0x3000000"),
     ["ServiceControle/e_PRC.sql"] = "select 1",
     ["icsMaster/f_PRC.sql"] = "select 1",
+    -- Alter/**: база — первой строкой; BOM — как у файлов из настоящего репозитория
+    ["Alter/Alter_2609/buh.sql"] = "\239\187\191-- buh\r\n-- виконувати послідовно\r\nselect 1",
+    ["Alter/Alter_2609/ua_master.sql"] = "--ua, master\nselect 1",
+    ["Alter/Alter_2609/dev_dup.sql"] = "-- dev, DUP_Old_Data\nselect 1",
+    ["Alter/Alter_2609/crocus.sql"] = "-- crocus\nselect 1",
+    ["Alter/Alter_2609/unknown.sql"] = "--ua, bhh, dev\nselect 1",
+    ["Alter/Alter_2609/code.sql"] = "--select * from icsTemp.dbo.x\nselect 1",
+    ["Alter/Alter_2609/none.sql"] = "select 1",
   },
 })
 
