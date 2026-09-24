@@ -637,19 +637,13 @@ end
 
 ---------------------------------------------------------------------------------------
 
----Отформатировать строки l1..l2 (1-based, включительно). Возвращает новый список строк
----той же длины: строки не добавляются и не удаляются.
----@param lines string[]
----@param l1 integer
----@param l2 integer
----@param opts? { tabstop?: integer }
----@return string[]
-function M.format(lines, l1, l2, opts)
+---sel(first, last) — выбрана ли запись со строками first..last.
+local function run(lines, sel, opts)
   opts = opts or {}
   local text = table.concat(lines, "\n")
   local recs = tok.tokenize(text, opts.tabstop or 4)
   for _, rec in ipairs(recs) do
-    rec.sel = rec.last >= l1 and rec.first <= l2
+    rec.sel = sel(rec.first, rec.last)
   end
   local sig = tok.flatten(recs)
   case_pass(recs, sig)
@@ -664,6 +658,36 @@ function M.format(lines, l1, l2, opts)
     out[#out + 1] = (rec.sel or rec.dirty) and rebuild(rec) or text:sub(rec.from, rec.to)
   end
   return vim.split(table.concat(out, "\n"), "\n", { plain = true })
+end
+
+---Отформатировать строки l1..l2 (1-based, включительно). Возвращает новый список строк
+---той же длины: строки не добавляются и не удаляются.
+---@param lines string[]
+---@param l1 integer
+---@param l2 integer
+---@param opts? { tabstop?: integer }
+---@return string[]
+function M.format(lines, l1, l2, opts)
+  return run(lines, function(first, last)
+    return last >= l1 and first <= l2
+  end, opts)
+end
+
+---То же для набора строк (номер → true) — разбросанных, как изменённые по git: один
+---проход вместо прохода на каждый кусок. Нужно линтеру.
+---@param lines string[]
+---@param set table<integer, boolean>
+---@param opts? { tabstop?: integer }
+---@return string[]
+function M.format_lines(lines, set, opts)
+  return run(lines, function(first, last)
+    for l = first, last do
+      if set[l] then
+        return true
+      end
+    end
+    return false
+  end, opts)
 end
 
 ---Отформатировать диапазон буфера, заменив только реально изменившиеся строки: так

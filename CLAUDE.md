@@ -126,7 +126,9 @@ Not a plugin — own code on top of vim-dadbod, wired up from
   begin/try/case stack), since T-SQL without semicolons only parses roughly
   from tokens. Rules that need the schema (FK, DEFAULT, column types) are
   out of scope. What `:SqlFormat` fixes by itself (case, spacing,
-  alignment) is not reported.
+  alignment) has no rules of its own: the changed lines are run through the
+  formatter dry (`sqlformat.format_lines`), and a line it would rewrite gets
+  a WARN `SqlFormat: … → <how it should look>` — so the two can't diverge.
   The tokenizer and word lists are shared with the formatter in
   `lua/config/sqltoken.lua`.
 - `lua/config/sqlcomplete.lua` — sets `b:db` in ordinary `.sql` files (on the

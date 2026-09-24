@@ -10,9 +10,13 @@
 -- Структурные (HINT) смотрят на устройство процедуры — где кончается условие if, какая
 -- инструкция следующая, последний ли это RETURN 0 — и держатся на эвристиках: T-SQL
 -- без точек с запятой по токенам разбирается только приблизительно. Правил, которым
--- нужна схема базы (FK, DEFAULT, типы колонок), здесь нет. То, что форматтер
--- (:SqlFormat) чинит сам — регистр, пробелы, выравнивание, — тоже не проверяется: это
--- делается <leader>df, а не глазами.
+-- нужна схема базы (FK, DEFAULT, типы колонок), здесь нет.
+--
+-- То, что форматтер (:SqlFormat) чинит сам — регистр, пробелы, выравнивание, —
+-- отдельными правилами не проверяется: изменённые строки прогоняются через сам
+-- форматтер вхолостую, и строка, которую он бы поменял, получает находку SqlFormat с
+-- тем, как она должна выглядеть. Так правила форматирования живут в одном месте и
+-- линтер с форматтером не могут разойтись.
 
 local tok = require("config.sqltoken")
 local lower, operand = tok.lower, tok.operand
@@ -891,6 +895,34 @@ local function scope(buf, on_known)
   end
 end
 
+---Строки из set (true — все), которые форматтер переписал бы: находки SqlFormat.
+---@param lines string[]
+---@param set true|table<integer, boolean>
+---@param opts? { tabstop?: integer }
+function M.unformatted(lines, set, opts)
+  local fmt = require("config.sqlformat")
+  local out = set == true and fmt.format(lines, 1, #lines, opts) or fmt.format_lines(lines, set, opts)
+  local diags = {}
+  for l, line in ipairs(lines) do
+    if out[l] ~= line and (set == true or set[l]) then
+      local want = vim.trim(out[l])
+      if vim.fn.strchars(want) > 70 then
+        want = vim.fn.strcharpart(want, 0, 70) .. "…"
+      end
+      diags[#diags + 1] = {
+        lnum = l - 1,
+        col = #line:match("^%s*"),
+        end_lnum = l - 1,
+        end_col = #line,
+        code = "SqlFormat",
+        message = "SqlFormat: не по стандарту, <leader>df → " .. want,
+        severity = vim.diagnostic.severity.WARN,
+      }
+    end
+  end
+  return diags
+end
+
 ---Проверить буфер и выставить диагностику.
 function M.lint(buf)
   buf = (buf == nil or buf == 0) and vim.api.nvim_get_current_buf() or buf
@@ -904,12 +936,18 @@ function M.lint(buf)
     vim.diagnostic.reset(ns, buf)
     return
   end
+  local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
   local diags = {}
-  for _, d in ipairs(M.check(vim.api.nvim_buf_get_lines(buf, 0, -1, false))) do
+  for _, d in ipairs(M.check(lines)) do
     if lines_set == true or lines_set[d.lnum + 1] then
-      d.source = "sqllint"
       diags[#diags + 1] = d
     end
+  end
+  if lines_set == true or next(lines_set) then
+    vim.list_extend(diags, M.unformatted(lines, lines_set, { tabstop = vim.bo[buf].tabstop }))
+  end
+  for _, d in ipairs(diags) do
+    d.source = "sqllint"
   end
   vim.diagnostic.set(ns, buf, diags)
 end

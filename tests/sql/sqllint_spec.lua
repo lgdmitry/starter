@@ -456,3 +456,22 @@ describe("ложные срабатывания с реальных файлов
     eq({}, found(src({ "set @Start = GETDATE()", "set @Sec = DATEDIFF(second, @Start, GETDATE())" })))
   end)
 end)
+
+describe("SqlFormat: строки, которые переписал бы форматтер", function()
+  local function lines(text)
+    return vim.split(text, "\n", { plain = true })
+  end
+  it("только изменённые строки, с тем, как должно быть", function()
+    local d =
+      lint.unformatted(lines("RAISERROR(77311,16,10) WITH SETERROR\nset @a=1\nRETURN -1"), { [1] = true, [3] = true })
+    eq(1, #d)
+    eq({ 0, "SqlFormat: не по стандарту, <leader>df → RAISERROR(77311, 16, 10) WITH SETERROR" }, {
+      d[1].lnum,
+      d[1].message,
+    })
+  end)
+  it("строка по стандарту — чисто; true — весь файл", function()
+    eq({}, lint.unformatted(lines("RAISERROR(77311, 16, 10) WITH SETERROR"), { [1] = true }))
+    eq(1, #lint.unformatted(lines("set @a = 1\nset @b=2"), true))
+  end)
+end)
