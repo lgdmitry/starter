@@ -1,8 +1,8 @@
--- Как позвать sqlcmd: подключения из .env, аутентификация, кодировки, флаги.
+-- Как позвать sqlcmd: подключения, аутентификация, кодировки, флаги.
 -- Куда именно идти для конкретного файла — отдельно, в config.sqltarget.
 --
--- Подключения берутся из dadbod-ui (DB_UI_* в .env проекта), логин и пароль — из
--- окружения (SQLCMDUSER и прочие, их раскрывает vim-dotenv).
+-- Подключения — g:dbs из config.sqldbs (плюс DB_UI_* из .env проекта, если он есть),
+-- логин и пароль — из окружения (SQLCMDUSER и прочие).
 
 local M = {}
 
@@ -106,7 +106,8 @@ function M.output_to_utf8(text)
   return is_utf8(text) and text or vim.fn.iconv(text, "cp1251", "utf-8")
 end
 
----Подключения из .env рядом с файлом (те же, что видит dadbod-ui).
+---Подключения: g:dbs (config.sqldbs) и DB_UI_* из .env рядом с файлом — те же, что
+---видит dadbod-ui.
 function M.connections(file)
   require("lazy").load({ plugins = { "vim-dotenv", "vim-dadbod" } })
   local env = {}
@@ -118,15 +119,18 @@ function M.connections(file)
     env = vim.fn.DotenvGet()
   end
   local prefix = vim.g.db_ui_dotenv_variable_prefix or "DB_UI_"
-  local list = {}
-  for name, url in pairs(env) do
-    local short = name:match("^" .. prefix .. "(.+)$")
-    if short then
-      list[#list + 1] = { name = short:lower(), url = url }
-    end
-  end
+  local list, seen = {}, {}
+  -- g:dbs первым и главнее: одноимённое подключение из старого .env проекта не
+  -- задваивает список и не подменяет URL из конфига
   for _, db in ipairs(type(vim.g.dbs) == "table" and vim.g.dbs or {}) do
     list[#list + 1] = { name = db.name, url = db.url }
+    seen[db.name:lower()] = true
+  end
+  for name, url in pairs(env) do
+    local short = name:match("^" .. prefix .. "(.+)$")
+    if short and not seen[short:lower()] then
+      list[#list + 1] = { name = short:lower(), url = url }
+    end
   end
   table.sort(list, function(a, b)
     return a.name < b.name
@@ -176,8 +180,36 @@ function M.by_name(list, wanted)
   end
 end
 
----Спросить подключение у пользователя.
-function M.select(list, prompt, cb)
+---Чьи подключения (префикс имени до `_`) скорее нужны для файла: репозиторий esql —
+---esql_*, файл под Crocus/ или ServiceControle/ (обе базы на crocus) — crocus_*,
+---остальное — dgsql_*. Без файла (буфер запроса) — по текущему каталогу.
+function M.preferred_group(file)
+  local path = vim.fs.normalize(file ~= "" and file or vim.uv.cwd()):lower()
+  local root = vim.fs.root(path, ".git")
+  if root and vim.fs.basename(root):lower() == "esql" then
+    return "esql"
+  end
+  for _, dir in ipairs({ "/crocus/", "/servicecontrole/" }) do
+    if (path .. "/"):find(dir, 1, true) then
+      return "crocus"
+    end
+  end
+  return "dgsql"
+end
+
+---Спросить подключение у пользователя. Первыми — подключения группы, которая скорее
+---нужна для file (M.preferred_group), дальше в прежнем порядке: список из g:dbs один на
+---все проекты, и без этого из esql первым стоял бы dgsql_dev.
+function M.select(list, prompt, cb, file)
+  local group = M.preferred_group(file or "")
+  local rank = {}
+  for i, c in ipairs(list) do
+    rank[c] = (c.name:lower():match("^[^_]+") == group and 0 or #list) + i
+  end
+  list = vim.list_slice(list)
+  table.sort(list, function(a, b)
+    return rank[a] < rank[b]
+  end)
   vim.ui.select(list, {
     prompt = prompt,
     format_item = function(c)

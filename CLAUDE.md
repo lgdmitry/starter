@@ -71,7 +71,8 @@ or variable, which only shows up when the server rejects it.
 Not a plugin — own code on top of vim-dadbod, wired up from
 `lua/plugins/dadbod.lua`:
 
-- `lua/config/sqlconn.lua` — transport: connections from `.env`, auth,
+- `lua/config/sqlconn.lua` — transport: connections (`g:dbs` from
+  `lua/config/sqldbs.lua`, plus `DB_UI_*` from a project `.env`), auth,
   encodings, running `sqlcmd` asynchronously with a progress spinner;
   `:SqlCancel` (`<leader>dc`) kills a running one.
 - `lua/config/sqltarget.lua` — *where* to go for a given file: which
@@ -100,6 +101,15 @@ Not a plugin — own code on top of vim-dadbod, wired up from
   (`desc table` / `desc function` / `show records` / `show enum`).
 - `lua/config/sqlquery.lua` — `:SqlQuery` (`<leader>dq`): a scratch query
   buffer bound to the connection and database of the current file;
+  `:SqlQueryFile [name]` (`<leader>dt`; not `<leader>dp` — that is LazyVim's
+  profiler group): a persistent one, opened in the current window — a file
+  `stdpath("data")/sqlquery/conn@db.sql` whose first line
+  `-- sqlquery: conn/db` holds the binding (re-read on
+  `BufReadPost`/`BufWritePost`, so it survives restarts and sessions);
+  `:SqlConn` (`<leader>ds`, query buffers only) picks another connection and
+  database for the current query buffer and renames an auto-named file.
+  Both kinds carry `b:sqlctx`, so a query buffer opened from a query buffer
+  inherits its connection instead of the rules.
   `:SqlRun` (`<leader>dx`) runs it, or the visual selection in any sql buffer.
 - `lua/config/sqlformat.lua` — `:SqlFormat` (`<leader>df`, operator in normal
   mode, selection in visual; sql buffers only): format T-SQL by the dgsql/esql
@@ -157,9 +167,12 @@ from their first line (`-- ua` / `master` / `buh` / `crocus` / `dev` / `DUP_Old_
 comma-separated),
 an unknown name refuses rather than falling back. Without `repo-conventions.json`
 there are fallback rules (dev connection by name/host, database from the first
-path folder or the URL). Login/password always come from the matching
-`DB_UI_*` connection in the project's `.env` (read by `tpope/vim-dotenv`),
-which in turn takes them from the environment (`SQLCMDUSER` etc.).
+path folder or the URL). Login/password always come from the connection with
+the same host: `g:dbs` in `lua/config/sqldbs.lua` — one connection per server
+(several per host, differing only in the database, made the host lookup pick
+the alphabetically first one) with `${VAR}` expanded from the environment
+(`SQLCMDUSER` etc.); a project `.env` (`DB_UI_*`, `tpope/vim-dotenv`) is still
+read, but `g:dbs` wins on a name clash.
 
 `multicursor.nvim` replays keys on every cursor; `:SqlDef` itself bails out
 when there are extra cursors, rather than the multicursor layer overriding

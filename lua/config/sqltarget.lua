@@ -35,6 +35,15 @@ local function server_databases(conn)
   return db_cache[conn.url]
 end
 
+---Базы сервера подключения по алфавиту — для выбора базы руками (:SqlConn).
+function M.databases(conn)
+  local out = vim.tbl_values(server_databases(conn))
+  table.sort(out, function(a, b)
+    return a:lower() < b:lower()
+  end)
+  return out
+end
+
 ---Путь файла внутри репозитория (в нижнем регистре, через /) и корень репозитория.
 local function repo_path(file)
   local root = file ~= "" and vim.fs.root(file, ".git") or nil
@@ -90,6 +99,12 @@ end
 ---Окружения репозитория (имя -> адрес сервера) из его .mcp.environments.json.
 local function environments(root, conv)
   local data = read_json(root .. "/" .. (conv.mcpEnvironmentsPath or ".claude/.mcp.environments.json"))
+  -- адрес там — ${secret:MSSQL_DEVSERVER_*}, как его раскрывает сам mssql-mcp-server
+  for _, e in ipairs(data and data.environments or {}) do
+    e.server = e.server and e.server:gsub("%${secret:([%w_]+)}", function(name)
+      return os.getenv(name) or ""
+    end)
+  end
   return data and data.environments or {}
 end
 
@@ -635,7 +650,7 @@ function M.pick(opts, cb)
       return go(conn)
     end
   end
-  sql.select(list, opts.prompt or "Подключение:", go)
+  sql.select(list, opts.prompt or "Подключение:", go, file)
 end
 
 function M.setup()

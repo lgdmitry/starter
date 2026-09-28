@@ -1,4 +1,4 @@
--- :SqlQuery / :SqlRun — черновик запроса рядом с процедурой и его выполнение.
+-- :SqlQuery / :SqlQueryFile / :SqlRun — черновик запроса рядом с процедурой и его выполнение.
 --
 -- Дырка, которую они закрывают: :SqlDeploy выкладывает файл целиком, :SqlDef/:SqlRows
 -- показывают объект — а разового «а что вернёт вот этот select» не было, и приходилось
@@ -11,15 +11,30 @@
 -- Здесь и вход (-f i:65001), и выход (sqlconn.output_to_utf8) под нашим контролем,
 -- а подключение с базой берутся те же, что у :SqlDeploy для этого файла.
 --
+-- Буферы запроса двух видов (b:sqlquery):
+--   "scratch" — временный, живёт до выхода из nvim, один на пару подключение/база;
+--   "file"    — постоянный: файл в M.dir, переживает перезапуск и сессии. Подключение
+--               записано в нём первой строкой (`-- sqlquery: conn/db`) — b:sqlctx
+--               в файле не сохранишь, а строку видно, её можно поправить руками (после
+--               :w она перечитывается), и файл при копировании уносит её с собой.
+--               Имя файла — `conn@db.sql`, по нему <leader>dt и находит запрос к паре,
+--               а :SqlConn переименовывает файл вслед за подключением.
+-- Оба привязаны к подключению через b:sqlctx, как и окна ответа, поэтому новый буфер
+-- запроса, открытый из буфера запроса, берёт подключение текущего, а не правила.
+--
 -- Клавиши глобальные (группа <leader>d, см. plugins/which-key.lua):
---   <leader>dq   — открыть буфер запроса для подключения/базы текущего файла
---   <leader>dQ   — то же, но подключение спрашивается
+--   <leader>dq   — открыть временный буфер запроса для подключения/базы текущего файла
+--   <leader>dQ   — то же, но подключение и база спрашиваются
+--   <leader>dt   — открыть постоянный запрос для подключения/базы текущего файла;
+--                  в самом постоянном запросе — завести ещё один к той же паре (~2, ~3…)
+--   <leader>dT   — то же, но подключение и база спрашиваются
+--   (не <leader>dp: у LazyVim это группа profiler — <leader>dpp, <leader>dph, <leader>dps)
 --   <leader>dx   — выполнить выделенное (в визуальном режиме)
 --   <leader>dc   — прервать выполняющийся sqlcmd (:SqlCancel, см. config.sqlconn)
 -- В самом буфере запроса <leader>dx работает и в обычном режиме — на весь буфер,
--- а q закрывает окно, как и в окне с ответом (ценой записи макросов: в черновике
--- запроса она нужна реже, чем закрыть его тем же движением, что и ответ).
--- С ! (:SqlQuery!, :SqlRun!) подключение спрашивается.
+-- <leader>ds (:SqlConn) меняет его подключение и базу, а q закрывает окно, как и в окне
+-- с ответом (ценой записи макросов: в черновике запроса она нужна реже, чем закрыть его
+-- тем же движением, что и ответ). С ! (:SqlQuery!, :SqlRun!) спрашиваются подключение и база.
 
 local sql = require("config.sqlconn")
 local target = require("config.sqltarget")
@@ -30,7 +45,66 @@ local M = {}
 ---До скольких символов sqlcmd режет колонки в выводе (-y/-Y).
 M.column_width = 50
 
+---Где лежат постоянные запросы. Не в репозитории: там им пришлось бы жить в .gitignore
+---каждого проекта, а запрос к dev-базе к коду проекта не относится.
+M.dir = vim.fs.normalize(vim.fn.stdpath("data")) .. "/sqlquery"
+
 local notify = sql.notifier("SqlQuery")
+
+---Первая строка постоянного запроса: подключение и база. Файла, откуда запрос завели,
+---в ней больше нет: подключения теперь общие (config.sqldbs), .env проекта искать не
+---нужно. Хвост после базы у старых файлов (там был путь) просто пропускается.
+local HEADER = "^%-%-%s*sqlquery:%s*([^/%s]+)/(%S+)"
+
+function M.header(ctx)
+  return ("-- sqlquery: %s/%s"):format(ctx.conn, ctx.db)
+end
+
+function M.parse_header(line)
+  local conn, db = (line or ""):match(HEADER)
+  if conn then
+    -- file = "", а не nil: pick берёт ctx.file or имя буфера, а имя постоянного
+    -- запроса — не файл проекта
+    return { conn = conn, db = db, file = "" }
+  end
+end
+
+---Постоянный ли это запрос — по пути, а не по b:sqlquery: вызывается из BufReadPost,
+---когда переменных у буфера ещё нет.
+function M.is_query_file(path)
+  path = vim.fs.normalize(path):lower()
+  local dir = M.dir:lower() .. "/"
+  return path:sub(1, #dir) == dir and path:match("%.sql$") ~= nil
+end
+
+---Имя файла, заведённого самим <leader>dt: `conn@db`, с `~N` при совпадении. Только такие
+---:SqlConn переименовывает — названные руками (:SqlQueryFile имя) остаются как есть.
+local AUTO = "^[^@]+@[^@~]+~?%d*$"
+
+---Путь постоянного запроса к паре. self — сам переименовываемый файл: его имя не занято.
+local function auto_path(conn, database, self)
+  local base = ("%s/%s@%s"):format(M.dir, conn, database)
+  local path, n = base .. ".sql", 1
+  -- диск регистронезависимый: dgsql_dev@Crocus и dgsql_dev@crocus — один файл
+  while vim.uv.fs_stat(path) and path:lower() ~= (self or ""):lower() do
+    n = n + 1
+    path = ("%s~%d.sql"):format(base, n)
+  end
+  return path
+end
+
+---Имена постоянных запросов (без .sql) — для дополнения и списка.
+function M.names(arglead)
+  local out = {}
+  for _, path in ipairs(vim.fn.glob(M.dir .. "/*.sql", false, true)) do
+    local name = vim.fn.fnamemodify(path, ":t:r")
+    if name:lower():find((arglead or ""):lower(), 1, true) == 1 then
+      out[#out + 1] = name
+    end
+  end
+  table.sort(out)
+  return out
+end
 
 ---Есть ли ради чего делить окно: хоть один залистованный буфер с файлом. На пустом
 ---старте (дашборд, [No Name]) вертикальный сплит только режет экран пополам ради
@@ -44,12 +118,122 @@ local function has_open_files()
   return false
 end
 
----Буфер запроса для этой пары подключение/база: один на пару, а не по новому на
----каждый вызов — иначе за день их набирается десяток.
-local function query_buffer(conn, database, file)
-  local name = ("sqlquery://%s/%s"):format(conn.name, database)
+---Буфер с таким именем. Не bufnr(): тот понимает имя как шаблон, а в путях и именах
+---подключений бывают его спецсимволы.
+local function buf_by_name(name)
+  name = vim.fs.normalize(name):lower()
   for _, buf in ipairs(vim.api.nvim_list_bufs()) do
-    if vim.api.nvim_buf_is_loaded(buf) and vim.api.nvim_buf_get_name(buf):find(name, 1, true) then
+    if vim.fs.normalize(vim.api.nvim_buf_get_name(buf)):lower() == name then
+      return buf
+    end
+  end
+end
+
+---Имя временного буфера. Два временных на одну пару бывают (второй переключили
+---:SqlConn туда, где уже был первый), а имя буфера обязано быть уникальным — E95.
+local function scratch_name(buf, conn, database)
+  local base = ("sqlquery://%s/%s"):format(conn, database)
+  local name, n = base, 1
+  while true do
+    local other = buf_by_name(name)
+    if not other or other == buf then
+      return name
+    end
+    n = n + 1
+    name = ("%s#%d"):format(base, n)
+  end
+end
+
+---Привязать буфер запроса к подключению и базе. b:sqlctx — та же переменная, что у окон
+---с ответом (config.sqlwin): благодаря ей K, <leader>dr и новый <leader>dq отсюда
+---идут в эту же базу, а не в ту, которую вычислили бы по имени буфера; b:db — для
+---дополнения таблиц и колонок (vim-dadbod-completion).
+local function bind(buf, conn, database, file)
+  local ctx = { file = file or "", conn = conn.name, db = database }
+  vim.b[buf].sqlctx = ctx
+  vim.b[buf].db = sql.with_database(conn.url, database)
+  if vim.b[buf].sqlquery == "scratch" then
+    pcall(vim.api.nvim_buf_set_name, buf, scratch_name(buf, conn.name, database))
+  elseif vim.b[buf].sqlquery == "file" then
+    local header = M.header(ctx)
+    local first = vim.api.nvim_buf_get_lines(buf, 0, 1, false)[1]
+    if M.parse_header(first) then
+      vim.api.nvim_buf_set_lines(buf, 0, 1, false, { header })
+    else
+      vim.api.nvim_buf_set_lines(buf, 0, 0, false, { header })
+    end
+    -- сразу на диск: иначе смена подключения потерялась бы вместе с несохранённым
+    -- буфером, а следующий запуск пошёл бы по старой строке
+    local old = vim.fs.normalize(vim.api.nvim_buf_get_name(buf))
+    local new = vim.fn.fnamemodify(old, ":t:r"):match(AUTO) and auto_path(conn.name, database, old) or old
+    vim.api.nvim_buf_call(buf, function()
+      if new == old then
+        return vim.cmd("silent update")
+      end
+      vim.cmd("silent keepalt file " .. vim.fn.fnameescape(new))
+      vim.cmd("silent write")
+    end)
+    if new:lower() ~= old:lower() then
+      os.remove(old)
+      -- :file оставляет незалистованный буфер со старым именем (keepalt не помогает),
+      -- и в него вёл бы # — в файл, которого уже нет
+      local stale = buf_by_name(old)
+      if stale and stale ~= buf then
+        pcall(vim.api.nvim_buf_delete, stale, { force = true })
+      end
+    end
+  end
+  -- дополнение запомнило таблицы прошлой базы
+  if vim.fn.exists("*vim_dadbod_completion#fetch") == 1 then
+    pcall(vim.fn["vim_dadbod_completion#fetch"], buf)
+  end
+end
+
+---Клавиши обоих видов буфера запроса. Только здесь, а не в любом sql-буфере:
+---«выполнить весь буфер» в файле процедуры означало бы :SqlDeploy, q в обычном файле
+---занят под что угодно другое, а сменить подключение обычному файлу — значит
+---перебить правила, по которым его выкладывают.
+local function map_keys(buf)
+  vim.keymap.set("n", "<leader>dx", "<cmd>SqlRun<cr>", { buffer = buf, desc = "Выполнить запрос" })
+  vim.keymap.set(
+    "n",
+    "<leader>ds",
+    "<cmd>SqlConn<cr>",
+    { buffer = buf, desc = "Сменить подключение запроса" }
+  )
+  -- окно закрывается, буфер остаётся жить: временный — bufhidden=hide, постоянный
+  -- сохраняется; текст вернётся тем же <leader>dq / <leader>dt
+  vim.keymap.set("n", "q", function()
+    local file = vim.b[buf].sqlquery == "file"
+    if file then
+      vim.cmd("silent update")
+    end
+    -- постоянный открыт в текущем окне, а не в своём сплите — окно чужое, его не
+    -- закрываем; единственное окно :close не закроет (E444) — в обоих случаях просто
+    -- уходим на предыдущий буфер, а если его нет — в пустой
+    if file or #vim.api.nvim_tabpage_list_wins(0) == 1 then
+      if not pcall(vim.cmd, "buffer #") then
+        vim.cmd("enew")
+      end
+      return
+    end
+    sqlwin.close_to(vim.b[buf].sqlquery_from)
+  end, { buffer = buf, desc = "Закрыть буфер запроса" })
+end
+
+---Временный буфер запроса для этой пары подключение/база: один на пару, а не по новому
+---на каждый вызов — иначе за день их набирается десяток. Ищем по b:sqlctx, а не по
+---имени: после :SqlConn имя может оказаться с суффиксом.
+local function query_buffer(conn, database, file)
+  for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+    local ctx = vim.b[buf].sqlctx
+    if
+      vim.api.nvim_buf_is_loaded(buf)
+      and vim.b[buf].sqlquery == "scratch"
+      and ctx
+      and ctx.conn == conn.name
+      and ctx.db == database
+    then
       return buf
     end
   end
@@ -59,34 +243,75 @@ local function query_buffer(conn, database, file)
   vim.bo[buf].buftype = "nofile" -- запрос никуда не сохраняется, sqlcmd получает его через временный файл
   vim.bo[buf].bufhidden = "hide"
   vim.bo[buf].swapfile = false
-  vim.b[buf].db = sql.with_database(conn.url, database)
-  -- b:sqlctx — та же переменная, что у окон с ответом (config.sqlwin): благодаря ей
-  -- K и <leader>dr в черновике спрашивают ту же базу, а не ту, которую вычислили бы
-  -- по имени безымянного буфера
-  vim.b[buf].sqlctx = { file = file, conn = conn.name, db = database }
-  pcall(vim.api.nvim_buf_set_name, buf, name)
+  vim.b[buf].sqlquery = "scratch"
+  bind(buf, conn, database, file)
   vim.bo[buf].filetype = "sql"
-  -- Эти две — только здесь: «выполнить весь буфер» в файле процедуры означало бы
-  -- :SqlDeploy, а q в обычном файле занят под что угодно другое.
-  vim.keymap.set("n", "<leader>dx", "<cmd>SqlRun<cr>", { buffer = buf, desc = "Выполнить запрос" })
-  -- окно закрывается, буфер остаётся жить (bufhidden=hide): текст запроса переживёт
-  -- закрытие и вернётся тем же <leader>dq
-  vim.keymap.set("n", "q", function()
-    -- окно может быть единственным (открылись без сплита) — :close там E444,
-    -- поэтому просто уходим на предыдущий буфер, а если его нет — в пустой
-    if #vim.api.nvim_tabpage_list_wins(0) == 1 then
-      if not pcall(vim.cmd, "buffer #") then
-        vim.cmd("enew")
-      end
-      return
-    end
-    sqlwin.close_to(vim.b[buf].sqlquery_from)
-  end, { buffer = buf, desc = "Закрыть буфер запроса" })
+  map_keys(buf)
   return buf
 end
 
+---Постоянный запрос открыт (BufReadPost) или сохранён (BufWritePost — строку
+---подключения могли поправить руками): привязать по первой строке.
+function M.attach_file(buf)
+  vim.b[buf].sqlquery = "file"
+  map_keys(buf)
+  local ctx = M.parse_header(vim.api.nvim_buf_get_lines(buf, 0, 1, false)[1])
+  if not ctx then
+    -- без строки подключения — как черновик без привязки: :SqlRun спросит подключение
+    vim.b[buf].sqlctx = { file = "" }
+    vim.b[buf].db = nil
+    return
+  end
+  vim.b[buf].sqlctx = ctx
+  local ok, conn = pcall(function()
+    return sql.by_name(sql.connections(ctx.file), ctx.conn)
+  end)
+  vim.b[buf].db = ok and conn and sql.with_database(conn.url, ctx.db) or nil
+end
+
+---Спросить базу на сервере подключения. Первыми — preferred (если они есть на этом
+---сервере), за ними база из URL, дальше все остальные базы сервера.
+local function choose_db(conn, preferred, cb)
+  local ok, names = pcall(target.databases, conn)
+  names = ok and names or {}
+  local known = {}
+  for _, db in ipairs(names) do
+    known[db:lower()] = db
+  end
+  local order, seen = {}, {}
+  local function add(db)
+    if db and db ~= "" and not seen[db:lower()] then
+      seen[db:lower()] = true
+      order[#order + 1] = db
+    end
+  end
+  -- база из URL — не выбор, а то, что записали в config.sqldbs; правила файла и
+  -- прежняя база буфера говорят о намерении больше, поэтому она после них
+  local url_db = sql.url_db(conn)
+  for _, db in ipairs(preferred) do
+    if db:lower() ~= url_db:lower() then
+      -- список баз не получили (сервер недоступен) — предложенные всё равно покажем
+      add(#names == 0 and db or known[db:lower()])
+    end
+  end
+  add(url_db)
+  for _, db in ipairs(names) do
+    add(db)
+  end
+  if #order == 0 then
+    return notify("на " .. conn.name .. " не нашлось баз", vim.log.levels.ERROR)
+  end
+  vim.ui.select(order, { prompt = ("База на %s:"):format(conn.name) }, function(db)
+    if db then
+      cb(db)
+    end
+  end)
+end
+
 ---Куда идти: в черновике и в окне ответа — ровно то, к чему они привязаны, иначе как
----у :SqlDeploy.
+---у :SqlDeploy. С ! после подключения спрашивается и база: подключение в
+---config.sqldbs одно на сервер, и выбрать его — ещё не значит выбрать базу (раньше
+---в .env на каждую базу было своё подключение, и выбор подключения её и задавал).
 local function pick(bang, cb)
   target.pick({
     ctx = vim.b.sqlctx,
@@ -96,30 +321,127 @@ local function pick(bang, cb)
     title = "SqlQuery",
     url_fallback = true,
   }, function(conn, dbs, file)
-    cb(conn, dbs[1], file)
+    if not bang then
+      return cb(conn, dbs[1], file)
+    end
+    choose_db(conn, dbs, function(db)
+      cb(conn, db, file)
+    end)
   end)
 end
 
----:SqlQuery — открыть буфер запроса в вертикальном сплите.
+---Показать буфер запроса: в его окне, если он уже виден, иначе в вертикальном сплите
+---(или в текущем окне, если делить нечего). show — как положить буфер в окно.
+local function present(buf, show)
+  local from = vim.api.nvim_get_current_win()
+  local shown = buf and vim.fn.bufwinid(buf) or -1
+  if shown ~= -1 then
+    vim.api.nvim_set_current_win(shown) -- уже открыт: второе окно на тот же буфер не нужно
+    return
+  end
+  local split = has_open_files()
+  if split then
+    vim.cmd("vsplit")
+  end
+  show()
+  -- куда вернуть курсор по q; без сплита возвращаться некуда, окно то же самое
+  vim.b.sqlquery_from = split and from or nil
+end
+
+---Курсор — туда, где писать: в пустом черновике на первую строку после заголовка.
+---Без startinsert: в новый буфер часто приходят вставить запрос (p) или сразу уйти
+---дальше, и insert тогда приходилось каждый раз гасить <Esc>.
+local function start_editing(buf, first_line)
+  local lines = vim.api.nvim_buf_get_lines(buf, first_line - 1, -1, false)
+  if #lines <= 1 and (lines[1] or "") == "" then
+    vim.api.nvim_win_set_cursor(0, { first_line, 0 })
+  end
+end
+
+---:SqlQuery — открыть временный буфер запроса.
 function M.open(opts)
   pick(opts.bang, function(conn, database, file)
-    local from = vim.api.nvim_get_current_win()
     local buf = query_buffer(conn, database, file)
-    local shown = vim.fn.bufwinid(buf)
-    if shown ~= -1 then
-      vim.api.nvim_set_current_win(shown) -- уже открыт: второе окно на тот же буфер не нужно
-    elseif has_open_files() then
-      vim.cmd("vsplit")
+    present(buf, function()
       vim.api.nvim_win_set_buf(0, buf)
-      vim.b[buf].sqlquery_from = from -- куда вернуть курсор по q
-    else
-      vim.api.nvim_win_set_buf(0, buf) -- делить нечего, занимаем текущее окно
-      vim.b[buf].sqlquery_from = nil -- возвращаться по q некуда, окно то же самое
-    end
-    if vim.api.nvim_buf_line_count(buf) == 1 and vim.api.nvim_buf_get_lines(buf, 0, 1, false)[1] == "" then
-      vim.cmd("startinsert")
-    end
+    end)
+    start_editing(buf, 1)
     notify(("запрос к %s/%s"):format(conn.name, database))
+  end)
+end
+
+---Открыть файл постоянного запроса — в текущем окне: это рабочий файл, как любой
+---другой, а не справка рядом с процедурой, как временный черновик.
+local function open_path(path)
+  -- закрытый (bdelete) запрос живёт дальше незалистованным со старым номером, и :edit
+  -- вернул бы его — а bufferline сортирует по номеру, и вкладка встала бы левее
+  -- текущего файла, хотя каждый новый встаёт справа. Стираем, чтобы номер был новый.
+  local old = buf_by_name(path)
+  if old and not vim.bo[old].buflisted and not vim.bo[old].modified and vim.fn.bufwinid(old) == -1 then
+    pcall(vim.api.nvim_buf_delete, old, { force = true })
+  end
+  vim.cmd.edit(vim.fn.fnameescape(path))
+  local buf = vim.api.nvim_get_current_buf()
+  local ctx = vim.b[buf].sqlctx or {}
+  start_editing(buf, M.parse_header(vim.api.nvim_buf_get_lines(buf, 0, 1, false)[1]) and 2 or 1)
+  notify(("%s → %s/%s"):format(vim.fn.fnamemodify(path, ":t:r"), ctx.conn or "?", ctx.db or "?"))
+end
+
+---:SqlQueryFile [имя] — открыть постоянный запрос к подключению текущего буфера (с ! —
+---выбранному руками): `conn@db.sql`, а нет его — завести. С именем — файл с этим именем,
+---у существующего подключение своё, из его первой строки.
+function M.open_file(opts)
+  local name = vim.trim(opts.args or ""):gsub("%.sql$", "")
+  if name:find('[/:*?"<>|]') then
+    return notify("недопустимое имя: " .. name, vim.log.levels.ERROR)
+  end
+  if name ~= "" and vim.uv.fs_stat(M.dir .. "/" .. name .. ".sql") then
+    return open_path(M.dir .. "/" .. name .. ".sql")
+  end
+  -- из постоянного запроса — новый файл к той же паре: открыть заново себя же смысла
+  -- нет, а «ещё один запрос сюда» — ровно то, зачем жмут <leader>dt, уже стоя в нём
+  local fresh = name == "" and vim.b.sqlquery == "file"
+  pick(opts.bang, function(conn, database, file)
+    local path = name ~= "" and (M.dir .. "/" .. name .. ".sql")
+      or fresh and auto_path(conn.name, database)
+      or (M.dir .. ("/%s@%s.sql"):format(conn.name, database))
+    if not vim.uv.fs_stat(path) then
+      vim.fn.mkdir(M.dir, "p")
+      vim.fn.writefile({ M.header({ conn = conn.name, db = database }), "" }, path)
+    end
+    open_path(path)
+  end)
+end
+
+---:SqlConn — сменить подключение и базу буфера запроса. База спрашивается следом:
+---на другом сервере нужная база редко совпадает с прежней, а подставить её молча —
+---значит выполнить запрос не там.
+function M.switch()
+  local buf = vim.api.nvim_get_current_buf()
+  if not vim.b[buf].sqlquery then
+    return notify(
+      "подключение меняется только в буфере запроса (<leader>dq / <leader>dt)",
+      vim.log.levels.WARN
+    )
+  end
+  local ctx = vim.b[buf].sqlctx or {}
+  local file = ctx.file or ""
+  local list = sql.connections(file)
+  if #list == 0 then
+    return notify("не найдено подключений DB_UI_* в .env проекта", vim.log.levels.ERROR)
+  end
+  sql.select(list, "Подключение:", function(conn)
+    if not conn then
+      return
+    end
+    -- первой — прежняя база, если она есть на этом сервере
+    choose_db(conn, { ctx.db }, function(db)
+      if not vim.api.nvim_buf_is_valid(buf) then
+        return
+      end
+      bind(buf, conn, db, file)
+      notify(("запрос теперь к %s/%s"):format(conn.name, db))
+    end)
   end)
 end
 
@@ -167,17 +489,52 @@ function M.setup()
     vim.keymap.set(mode, lhs, rhs, { desc = desc })
   end
   map("n", "<leader>dq", "<cmd>SqlQuery<cr>", "Буфер запроса к базе файла")
-  map("n", "<leader>dQ", "<cmd>SqlQuery!<cr>", "Буфер запроса, выбрав подключение")
+  map(
+    "n",
+    "<leader>dQ",
+    "<cmd>SqlQuery!<cr>",
+    "Буфер запроса, выбрав подключение и базу"
+  )
+  map("n", "<leader>dt", "<cmd>SqlQueryFile<cr>", "Постоянный запрос к базе файла")
+  map(
+    "n",
+    "<leader>dT",
+    "<cmd>SqlQueryFile!<cr>",
+    "Постоянный запрос, выбрав подключение и базу"
+  )
   map("x", "<leader>dx", ":<C-u>'<,'>SqlRun<cr>", "Выполнить выделенный запрос")
 
   vim.api.nvim_create_user_command("SqlQuery", M.open, {
     bang = true,
-    desc = "Открыть буфер запроса к базе текущего файла (! — выбрать подключение)",
+    desc = "Открыть временный буфер запроса к базе текущего файла (! — выбрать подключение и базу)",
+  })
+  vim.api.nvim_create_user_command("SqlQueryFile", M.open_file, {
+    bang = true,
+    nargs = "?",
+    complete = function(arglead)
+      return M.names(arglead)
+    end,
+    desc = "Открыть постоянный запрос к базе текущего файла или по имени (! — выбрать подключение и базу)",
+  })
+  vim.api.nvim_create_user_command("SqlConn", M.switch, {
+    desc = "Сменить подключение и базу буфера запроса",
   })
   vim.api.nvim_create_user_command("SqlRun", M.run, {
     bang = true,
     range = true,
-    desc = "Выполнить буфер или выделение через sqlcmd (! — выбрать подключение)",
+    desc = "Выполнить буфер или выделение через sqlcmd (! — выбрать подключение и базу)",
+  })
+
+  -- Постоянные запросы привязываются к подключению при каждом открытии, в том числе
+  -- из восстановленной сессии: b:sqlctx в сессию не пишется, строка в файле — да.
+  vim.api.nvim_create_autocmd({ "BufReadPost", "BufWritePost" }, {
+    group = vim.api.nvim_create_augroup("sqlquery", { clear = true }),
+    pattern = "*.sql",
+    callback = function(ev)
+      if M.is_query_file(ev.match) then
+        M.attach_file(ev.buf)
+      end
+    end,
   })
 end
 

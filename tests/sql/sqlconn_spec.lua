@@ -125,3 +125,49 @@ describe("run", function()
     eq(nil, vim.uv.fs_stat(seen.input))
   end)
 end)
+
+describe("select", function()
+  local sql = t.fresh()
+  local LIST = {
+    { name = "dgsql_dev" },
+    { name = "dgsql_test" },
+    { name = "crocus_dev" },
+    { name = "crocus_test" },
+    { name = "esql_dev" },
+    { name = "esql_test" },
+  }
+  local dgsql = t.repo({
+    name = "dgsql",
+    files = { ["Crocus/a_PRC.sql"] = "", ["ServiceControle/e_PRC.sql"] = "", ["ics_ua97/b_PRC.sql"] = "" },
+  })
+  local esql = t.repo({ name = "esql", files = { ["ics_ua97/c_PRC.sql"] = "" } })
+
+  local function order(file)
+    local names
+    local select = vim.ui.select
+    vim.ui.select = function(items, opts)
+      names = vim.tbl_map(opts.format_item, items)
+    end
+    sql.select(LIST, "?", function() end, file)
+    vim.ui.select = select
+    return names
+  end
+
+  it("esql — первыми esql, остальные в прежнем порядке", function()
+    eq(
+      { "esql_dev", "esql_test", "dgsql_dev", "dgsql_test", "crocus_dev", "crocus_test" },
+      order(esql .. "/ics_ua97/c_PRC.sql")
+    )
+  end)
+  it("под Crocus/ и ServiceControle/ — crocus", function()
+    eq("crocus_dev", order(dgsql .. "/Crocus/a_PRC.sql")[1])
+    eq("crocus_dev", order(dgsql .. "/ServiceControle/e_PRC.sql")[1])
+  end)
+  it("иначе — dgsql", function()
+    eq("dgsql_dev", order(dgsql .. "/ics_ua97/b_PRC.sql")[1])
+  end)
+  it("список не меняется", function()
+    order(esql .. "/ics_ua97/c_PRC.sql")
+    eq("dgsql_dev", LIST[1].name)
+  end)
+end)

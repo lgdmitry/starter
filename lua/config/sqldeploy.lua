@@ -324,7 +324,7 @@ function M.deploy_files(files, opts)
       return notify("отменено")
     end
     build(conn)
-  end)
+  end, sqls[1])
 end
 
 function M.setup()
