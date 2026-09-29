@@ -19,6 +19,11 @@ vim.g.snacks_animate = false
 -- завершается до объявления функций -> E117 при движении курсора по словам.
 vim.g.omni_sql_no_default_maps = 1
 
+-- В esql много легаси-файлов с расширением .SQL, а vim.filetype сверяет расширение
+-- с учётом регистра (fileignorecase на это не влияет) — filetype оставался пустым,
+-- и весь SQL-слой (K, :SqlLint, :SqlFormat, отступы) на них не включался.
+vim.filetype.add({ extension = { SQL = "sql" } })
+
 -- Английская раскладка Windows во всех режимах, кроме insert (см. config/keyboard.lua).
 -- Здесь, а не в config/autocmds.lua: тот грузится на VeryLazy, то есть уже после
 -- VimEnter, и первого сброса раскладки на старте не случилось бы вовсе.
