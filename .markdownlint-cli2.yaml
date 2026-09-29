@@ -1,1 +1,7 @@
-config: { MD013: false } 
+# Глобальный конфиг markdownlint-cli2: nvim-lint и conform передают его через
+# --config (lua/plugins/markdown.lua), так что он действует для любого файла.
+config:
+  # Длинные строки в markdown — норма (абзацы, ссылки, таблицы), а
+  # переносить их вручную ради линтера незачем.
+  MD013: false
+  MD060: false
