@@ -62,10 +62,10 @@ describe("токенные правила", function()
     eq(
       { "1:S29", "5:S29" },
       found(
-        src({ "if not exists (select 1 from T)", "begin", "  RETURN -1", "end", "if exists", "  (select 1 from T)" })
+        src({ "if not exists(select 1 from T)", "begin", "  RETURN -1", "end", "if exists", "  (select 1 from T)" })
       )
     )
-    eq({}, found(src({ "if not exists(", "  select 1", "  from T)" })))
+    eq({}, found(src({ "if not exists (", "  select 1", "  from T)" })))
   end)
   it("S1: таб — одна находка на строку", function()
     eq({ "1:S1", "2:S1" }, found("\tselect\t1\n  select 2\t-- x"))
@@ -220,7 +220,7 @@ describe("S55: тело if / else в begin … end", function()
         "      else 2",
         "    end",
         "begin",
-        "  if not exists(",
+        "  if not exists (",
         "    select 1",
         "    from T",
         "    where a = @a)",
@@ -438,7 +438,7 @@ describe("ложные срабатывания с реальных файлов
         "AS BEGIN",
         "  RETURN 0",
         "END",
-        "if not exists(select 1 from T)",
+        "if not exists (select 1 from T)",
         "begin",
         "  DROP PROCEDURE IF EXISTS x",
         "end",
@@ -454,6 +454,120 @@ describe("ложные срабатывания с реальных файлов
   )
   it("S22: GETDATE() в DATEDIFF — замер времени", function()
     eq({}, found(src({ "set @Start = GETDATE()", "set @Sec = DATEDIFF(second, @Start, GETDATE())" })))
+  end)
+end)
+
+describe("правила скилла 1.5.9", function()
+  it("S64: подзапрос в списке select, exists в case — HINT", function()
+    local d = lint.check({
+      "select",
+      "   chtrID   = r.chtrID",
+      "  ,PeerEmID = (select top 1 p.emID from chtRoomMembers p where p.chtrID = r.chtrID)",
+      "  ,State    =",
+      "    case",
+      "      when exists (select 1 from M m where m.chtrID = r.chtrID) then 2",
+      "      else 0",
+      "    end",
+      "from chtRooms r",
+    })
+    eq(
+      { "3:S64", "6:S64" },
+      vim.tbl_map(function(x)
+        return (x.lnum + 1) .. ":" .. x.code
+      end, d)
+    )
+    eq(vim.diagnostic.severity.HINT, d[1].severity)
+  end)
+  it(
+    "S64: присваивание переменной, derived table, apply, exists в where — не в счёт",
+    function()
+      eq(
+        {},
+        found(src({
+          "set @x = (select COUNT(1) from T)",
+          "select @Status = STUFF((select ',' + s.Name from S s FOR XML PATH('')), 1, 1, '')",
+          "select top (@Rows)",
+          "  t.a",
+          "from (",
+          "  select",
+          "    a",
+          "  from T) t",
+          "  outer apply (",
+          "    select",
+          "      b",
+          "    from R",
+          "    where R.a = t.a) r",
+          "where exists (",
+          "  select 1",
+          "  from Q",
+          "  where Q.a = t.a)",
+        }))
+      )
+    end
+  )
+  it(
+    "S65: CREATE TABLE # после проверок — HINT; сразу после declare — чисто",
+    function()
+      eq(
+        { "11:S65" },
+        found(proc({
+          "  SET NOCOUNT ON",
+          "  declare",
+          "     @RetCode int",
+          "  if @dcID is NULL",
+          "  begin",
+          "    RAISERROR(60002, 16, 10, '@dcID')",
+          "  end",
+          "  DROP TABLE IF EXISTS #TmpA",
+          "  CREATE TABLE #TmpA (",
+          "     a int",
+          "  )",
+          "  DROP TABLE IF EXISTS #TmpA",
+        }))
+      )
+      eq(
+        {},
+        found(proc({
+          "  SET NOCOUNT ON",
+          "  declare",
+          "     @RetCode int",
+          "  --",
+          "  DROP TABLE IF EXISTS #TmpA",
+          "  CREATE TABLE #TmpA (",
+          "     a int",
+          "  )",
+          "  DROP TABLE IF EXISTS #TmpB",
+          "  CREATE TABLE #TmpB (a int)",
+          "  if @dcID is NULL",
+          "  begin",
+          "    RAISERROR(60002, 16, 10, '@dcID')",
+          "  end",
+          "  DROP TABLE IF EXISTS #TmpA",
+          "  DROP TABLE IF EXISTS #TmpB",
+        }))
+      )
+    end
+  )
+  it("P16: END тела — без комментария", function()
+    eq({ "3:P16" }, found(src({ "CREATE PROCEDURE dbo.em_InsX", "AS BEGIN", "END -- procedure" })))
+    eq(
+      {},
+      found(
+        src({
+          "CREATE PROCEDURE dbo.em_InsX",
+          "AS BEGIN",
+          "  if @a = 1",
+          "  begin",
+          "    set @a = 2",
+          "  end -- a",
+          "END",
+        })
+      )
+    )
+  end)
+  it("P14: GRANT на IP-объект", function()
+    eq({ "1:P14" }, found("GRANT EXEC ON [dbo].[cht_IPGetRooms] TO [gn_DBO]"))
+    eq({}, found("GRANT EXEC ON [dbo].[cht_GetRooms] TO [gn_DBO]"))
   end)
 end)
 

@@ -19,7 +19,7 @@
 -- линтер с форматтером не могут разойтись.
 
 local tok = require("config.sqltoken")
-local lower, operand = tok.lower, tok.operand
+local lower, operand, is_comment = tok.lower, tok.operand, tok.is_comment
 
 local M = {}
 
@@ -84,8 +84,9 @@ end
 ---Предпроход для структурных правил. Каждому токену: d — глубина скобок, b — номер
 ---батча (GO), el — строка конца, in_try — внутри begin try; end — closes (что он
 ---закрыл: begin / try / catch / case), else — case_else. Батчу — first / last, proc
----(имя, если в нём CREATE PROCEDURE) и proc_end — END процедуры: после него в том же
----батче бывает сторож с DROP PROCEDURE, и он уже не тело.
+---(имя, если в нём CREATE PROCEDURE), proc_begin / proc_end — BEGIN и END тела (у
+---функции и триггера тоже): после END в том же батче бывает сторож с DROP PROCEDURE,
+---и он уже не тело.
 local function annotate(sig)
   local batches, stack, depth, tries, proc_open = { { first = 1 } }, {}, 0, 0, false
   for _, t in ipairs(sig) do
@@ -109,6 +110,7 @@ local function annotate(sig)
       local kind = block_begin(sig, i)
       if kind and #stack == 0 and is_word(sig[i - 1], "as") then
         proc_open = true
+        batches[#batches].proc_begin = i
       end
       stack[#stack + 1] = kind
       tries = tries + (kind == "try" and 1 or 0)
@@ -369,12 +371,45 @@ function rules.date_part(sig, add)
   end
 end
 
--- S29: `exists(` — скобка на той же строке, без пробела.
+-- S29: `exists (` — скобка на той же строке, через один пробел.
 function rules.exists(sig, add)
   for i, t in ipairs(sig) do
     local p = sig[i + 1]
-    if is_word(t, "exists") and p and p.k == "lparen" and (p.l ~= t.l or p.sp > 0) then
-      add(t, "S29", "`exists(` — скобка вплотную, на той же строке")
+    if is_word(t, "exists") and p and p.k == "lparen" and (p.l ~= t.el or p.sp ~= 1) then
+      add(t, "S29", "`exists (` — скобка на той же строке, через один пробел")
+    end
+  end
+end
+
+-- P14: IP-объект (cht_IPGetRooms) зовут только из других dbo-объектов, права там даёт
+-- цепочка владения — GRANT на него лишний.
+function rules.grant_ip(sig, add)
+  for i, t in ipairs(sig) do
+    if is_word(t, "grant") and line_start(sig, i) then
+      local j = i + 1
+      while sig[j] and not is_word(sig[j], "on", "to") and sig[j].l == t.l do
+        j = j + 1
+      end
+      if is_word(sig[j], "on") then
+        local k, name = j + 1, nil
+        while sig[k] and (sig[k].k == "word" or sig[k].k == "ident") do
+          name = unbracket(sig[k].s)
+          if not (sig[k + 1] and sig[k + 1].k == "dot") then
+            break
+          end
+          k = k + 2
+        end
+        if name and name:match("^%w+_IP%u") then
+          add(
+            t,
+            "P14",
+            ("на IP-объект GRANT не даётся: %s зовут только из dbo-объектов"):format(
+              name
+            ),
+            sig[k]
+          )
+        end
+      end
     end
   end
 end
@@ -520,7 +555,7 @@ end
 ---------------------------------------------------------------------------------------
 -- Структурные правила (HINT). Получают ещё ctx из annotate: батчи и процедуры в них.
 
-local STRUCT = tok.set("S7 S9 S22 S24 S32 S34 S51 S55")
+local STRUCT = tok.set("S7 S9 S22 S24 S32 S34 S51 S55 S64 S65")
 
 ---Батчи с процедурой: только к ним относится «в начале / в конце процедуры».
 local function procs(ctx)
@@ -760,6 +795,92 @@ function rules.repeated_call(sig, add, ctx)
   end
 end
 
+-- S64: подзапрос в списке select — источник уходит в from (outer / cross apply, join):
+-- одна apply отдаёт сразу несколько колонок, все входы запроса видны в from. exists в
+-- case — то же самое. Присваивание переменным (select @x = (select …)) — не колонка
+-- набора, не в счёт; как и derived table в from и exists в where — список кончается на
+-- from / into / where.
+local LIST_END = tok.set("from into where group order having union except intersect for option")
+
+function rules.select_subquery(sig, add)
+  local seen = {}
+  for i, t in ipairs(sig) do
+    if is_word(t, "select") then
+      local j = i + 1
+      if is_word(sig[j], "distinct", "all") then
+        j = j + 1
+      end
+      if is_word(sig[j], "top") then
+        j = sig[j + 1] and sig[j + 1].k == "lparen" and (close_paren(sig, j + 1) or j) + 1 or j + 2
+        if is_word(sig[j], "percent") then
+          j = j + 1
+        end
+        if is_word(sig[j], "with") and is_word(sig[j + 1], "ties") then
+          j = j + 2
+        end
+      end
+      local assign = sig[j] and sig[j].k == "var" and sig[j + 1] and sig[j + 1].s == "="
+      while not assign and sig[j] and sig[j].b == t.b and sig[j].d >= t.d do
+        local s = sig[j]
+        if s.d == t.d and (LIST_END[lower(s) or ""] or line_start(sig, j) and stmt_word(sig, j)) then
+          break
+        end
+        if s.d > t.d and is_word(s, "select") and not seen[j] then
+          seen[j] = true
+          add(
+            s,
+            "S64",
+            "подзапрос в списке select — источник в from: outer apply / cross apply / join"
+          )
+        end
+        j = j + 1
+      end
+    end
+  end
+end
+
+-- S65: временные таблицы объявляются сразу за блоком declare, до проверок параметров:
+-- вверху процедуры видно всё, с чем она работает. До CREATE TABLE #… в теле допустимы
+-- только SET NOCOUNT / declare / set, DROP TABLE IF EXISTS и другие CREATE TABLE #.
+local BEFORE_TEMP = tok.set("declare set drop create begin")
+
+function rules.temp_top(sig, add, ctx)
+  for _, b in ipairs(procs(ctx)) do
+    local stray -- первая инструкция тела, после которой temp-таблицу уже поздно создавать
+    for i = (b.proc_begin or b.last) + 1, b.proc_end or b.last do
+      local t = sig[i]
+      if t.d == 0 and line_start(sig, i) then
+        local temp = is_word(t, "create") and is_word(sig[i + 1], "table") and sig[i + 2] and sig[i + 2].k == "temp"
+        if temp and stray then
+          add(
+            t,
+            "S65",
+            ("CREATE TABLE %s — сразу после declare, до проверок и тела"):format(
+              sig[i + 2].s
+            ),
+            sig[i + 2]
+          )
+        elseif not stray and (stmt_word(sig, i) or is_word(t, "select", "with")) and not BEFORE_TEMP[lower(t)] then
+          stray = t
+        end
+      end
+    end
+  end
+end
+
+-- P16: тело закрывается голым END — `END -- procedure` остался от файлов с несколькими
+-- процедурами, при одной на файл это очевидный комментарий (S57).
+function rules.bare_end(sig, add, ctx)
+  for _, b in ipairs(ctx.batches) do
+    local e = b.proc_end and sig[b.proc_end]
+    local rec = e and ctx.recs[e.ri]
+    local c = rec and rec.toks[e.ti + 1]
+    if c and is_comment(c) and c.l == e.l then
+      add(c, "P16", "тело закрывается голым END, без комментария")
+    end
+  end
+end
+
 -- S24: Get-процедура не сортирует выходной набор — сортирует форма. order by в top,
 -- в over (…), within group (…), в присваивании переменным и в insert … select — не
 -- выходной набор.
@@ -810,6 +931,7 @@ function M.check(lines)
   local recs = tok.tokenize(table.concat(lines, "\n"), 4)
   local sig = tok.flatten(recs)
   local ctx = annotate(sig)
+  ctx.recs = recs
   local out = {}
   local function add(t, code, msg, last)
     last = last or t

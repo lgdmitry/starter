@@ -89,17 +89,18 @@ local function match_end(get, lnum)
 end
 
 ---Для `)` в начале строки — отступ строки с парной `(` (стандарт закрывает скобку на
----уровне той строки, где она открылась: `) AS BEGIN`, `) s on ...`).
-local function match_paren(get, lnum)
-  local depth = 0
+---уровне той строки, где она открылась: `) AS BEGIN`, `) s on ...`). depth — сколько
+---`)` уже набрано до строки lnum - 1 (по умолчанию одна — та, что в начале lnum).
+local function match_paren(get, lnum, depth)
+  depth = depth or 1
   return scan_back(get, lnum, function(t, _, _, line)
     if t.k == "rparen" then
       depth = depth + 1
     elseif t.k == "lparen" then
+      depth = depth - 1
       if depth == 0 then
         return select(2, parse(line))
       end
-      depth = depth - 1
     end
   end)
 end
@@ -208,6 +209,18 @@ function M.compute(get, lnum, sw)
   end
   if plast.k == "lparen" then
     return pind + sw
+  end
+  -- подзапрос закрылся в хвосте своей последней строки (`and ms.IsDeleted = 0) unr`,
+  -- S48) — дальше уровень конструкции, где открылась скобка (`outer apply (`)
+  local balance = 0
+  for _, t in ipairs(psig) do
+    balance = balance + (t.k == "lparen" and 1 or t.k == "rparen" and -1 or 0)
+  end
+  if balance < 0 then
+    local col = match_paren(get, prev + 1, 0)
+    if col then
+      return col
+    end
   end
   -- `select` / `declare` одни в строке — первый элемент на +3 (S2)
   if #psig == 1 and LIST_OPENERS[pfw] then

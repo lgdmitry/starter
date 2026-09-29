@@ -113,10 +113,10 @@ Not a plugin — own code on top of vim-dadbod, wired up from
   `:SqlRun` (`<leader>dx`) runs it, or the visual selection in any sql buffer.
 - `lua/config/sqlformat.lua` — `:SqlFormat` (`<leader>df`, operator in normal
   mode, selection in visual; sql buffers only): format T-SQL by the dgsql/esql
-  standard (skill `mssql-repo-skills:sql-standards`, `tsql-style.md`). Only the
+  standard (skill `mssql-repo-skills:sql-standards`, `tsql-style.md`; rules as of 1.5.9). Only the
   range, never the whole file on save — the standard applies to new/changed
   lines. Token level strictly inside the range (case per §13, operator/comma/
-  bracket spacing, `exists(`, full date parts); block level (leading commas and
+  bracket spacing, `exists (`, `UNION ALL`, full date parts); block level (leading commas and
   their indent from the introducing line, aligned `=`, type/NULL/comment
   columns) for every block the range touches. Columns come from the rules
   alone (longest element), not from how neighbouring legacy lines are aligned.
@@ -130,8 +130,9 @@ Not a plugin — own code on top of vim-dadbod, wired up from
   file not yet added to git counts as new entirely (gitsigns doesn't attach
   to untracked files, so `git ls-files` is asked once per buffer). `:SqlLint!`
   switches the buffer to the whole file, `:SqlLint` back. Token rules are
-  WARN (S1, S3, S4, S8, S12, S20, S29, S33, S42, S43, S52, S54); structural
-  ones are HINT (S7, S9, S22, S24, S32, S34, S51, S55) — heuristics over a
+  WARN (S1, S3, S4, S8, S12, S20, S29, S33, S42, S43, S52, S54, and P14/P16
+  from `create-procedure.md`); structural ones are HINT (S7, S9, S22, S24,
+  S32, S34, S51, S55, S64, S65) — heuristics over a
   pre-pass (`annotate`: paren depth, GO batches, the procedure and its END,
   begin/try/case stack), since T-SQL without semicolons only parses roughly
   from tokens. Rules that need the schema (FK, DEFAULT, column types) are

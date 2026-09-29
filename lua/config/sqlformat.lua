@@ -13,8 +13,8 @@
 -- Что делается — два уровня, строки не переразбиваются (кроме переноса висячей запятой
 -- в начало следующей строки):
 --   1. токены, строго внутри диапазона: регистр (S5, S6, §13), пробелы вокруг операторов
---      (S38), после запятой в строке (S35), без пробелов у скобок (S37), `exists(` (S29),
---      табы (S1), полные имена частей даты (S33);
+--      (S38), после запятой в строке (S35), без пробелов у скобок (S37), `exists (` (S29),
+--      табы (S1), полные имена частей даты (S33), UNION [ALL] заглавными (S66);
 --   2. блоки, целиком, если диапазон их задел: ведущие запятые (S2) и их отступ от
 --      вводящей строки, выровненные `=` в списках (S11), колонки типов / NULL /
 --      комментариев в объявлениях (S21). Целиком — потому что стандарт сам требует
@@ -198,6 +198,8 @@ local function case_pass(recs, sig)
         edit(t, "WITH")
       elseif (w == "source" or w == "target") and pw == "by" then
         edit(t, w)
+      elseif w == "union" or (w == "all" and pw == "union") then
+        edit(t, t.s:upper()) -- S66: единственное из ключевых слов запроса — заглавными
       elseif KEYWORDS[w] then
         edit(t, w)
       end
@@ -239,8 +241,10 @@ local function space_pass(recs, sig)
           end
           local p = i > 1 and toks[i - 1]
           local pw = p and lower(p)
-          if pw == "exists" or (pw and FUNCTIONS[pw] and p.s == p.s:upper()) then
-            t.sp = 0 -- exists( (S29), ISNULL( без пробела
+          if pw == "exists" then
+            t.sp = 1 -- exists ( (S29): ключевое слово, а не функция
+          elseif pw and FUNCTIONS[pw] and p.s == p.s:upper() then
+            t.sp = 0 -- ISNULL( без пробела
           end
         elseif t.k == "rparen" and i > 1 and not in_run(toks, i) then
           t.sp = 0

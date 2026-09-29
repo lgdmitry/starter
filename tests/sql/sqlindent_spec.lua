@@ -80,8 +80,18 @@ describe("клаузы", function()
     eq(2, indent("  select a, (select 1 from X)\nfrom"))
   end)
   it("from внутри скобок — к select в скобке", function()
-    eq(12, indent("  if exists(select 1\nfrom"))
+    eq(13, indent("  if exists (select 1\nfrom"))
   end)
+  it(
+    "после подзапроса, закрытого в хвосте строки, — уровень его конструкции (S48)",
+    function()
+      local q = "from chtRooms r\n  outer apply (\n    select\n      UnreadCount = COUNT(1)\n"
+        .. "    from chtMessages ms\n    where ms.chtrID = r.chtrID\n      and ms.IsDeleted = 0) unr\n"
+      eq(2, indent(q))
+      eq(0, indent("if not exists (\n  select 1\n  from T\n  where a = @a)\n"))
+      eq(2, indent("  set @a = ISNULL(@b, 0)\n"), "скобки в строке сбалансированы")
+    end
+  )
   it("без select — отступ предыдущей строки", function()
     eq(4, indent("    set @a = 1\nfrom"))
     eq(4, indent("  select a from T\n  begin\n    set @a = 1\nfrom"), "select за begin — чужой")

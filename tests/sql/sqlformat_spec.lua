@@ -18,14 +18,20 @@ describe("токены", function()
     )
   end)
   it(
-    "exists( вместе, * и унарный минус не трогает, скобки без пробелов",
+    "exists ( через пробел, * и унарный минус не трогает, скобки без пробелов",
     function()
       eq(
-        "if not exists(select COUNT(*), t.* from t where (a) = -@b * 2)",
-        run("if not exists ( select count(*), t.* from t where ( a )=-@b*2 )")
+        "if not exists (select COUNT(*), t.* from t where (a) = -@b * 2)",
+        run("if not exists( select count(*), t.* from t where ( a )=-@b*2 )")
       )
     end
   )
+  it("UNION / UNION ALL — заглавными (S66), all без union — нет", function()
+    eq(
+      "select a from T\nUNION ALL\nselect a from S UNION select all a from R",
+      run("select a from T\nunion all\nselect a from S union select all a from R")
+    )
+  end)
   it("серия из трёх скобок — исключение S37", function()
     eq("set @a = ((( 1 )))", run("set @a=((( 1 )))"))
   end)
