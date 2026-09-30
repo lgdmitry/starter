@@ -11,7 +11,7 @@ change a module, update its document **in the same commit**.
 
 | Topic | File |
 | --- | --- |
-| Custom MS SQL layer: `lua/config/sql*.lua` and the local plugin `plugins-local/sqlkit` (formatter, linter, indent), target resolution, `sqlcmd` encodings | `docs/sql.md` |
+| Custom MS SQL layer: local plugins `plugins-local/mssql` (commands over dadbod/`sqlcmd`) and `plugins-local/sqlkit` (formatter, linter, indent), connections in `lua/config/sqldbs.lua`, target resolution, `sqlcmd` encodings | `docs/sql.md` |
 | Why the SQL layer is split the way it is | `docs/sql-refactor.md` |
 | Keyboard layout switching, why no cyrillic mappings | `docs/keyboard.md` |
 
@@ -40,7 +40,7 @@ Syntax-check a file without starting the UI:
 
 ```bash
 "/c/Program Files/Neovim/bin/nvim.exe" --headless \
-  -c "lua print(loadfile('lua/config/sqlobject.lua') ~= nil)" -c "qa"
+  -c "lua print(loadfile('lua/config/session.lua') ~= nil)" -c "qa"
 ```
 
 ## Verifying changes
@@ -60,13 +60,14 @@ Two things that will waste time otherwise:
   `lazy-lock.json`. Check `git status` afterwards and don't fold that into an
   unrelated commit.
 
-The SQL layer has specs in `tests/sql/` (own tiny runner, no plugins, fake
-server and repo from `tests/fixtures.lua`). Run them after any change to
-`lua/config/sql*.lua`; `-u NONE` keeps lazy from touching `lazy-lock.json`:
+The mssql plugin has specs in `plugins-local/mssql/tests/` (own tiny runner, no
+plugins, fake server and repo from `tests/fixtures.lua` there). Run them after
+any change to `plugins-local/mssql`; `-u NONE` keeps lazy from touching
+`lazy-lock.json`:
 
 ```bash
 "/c/Program Files/Neovim/bin/nvim.exe" --headless -u NONE \
-  -l C:/Users/pesotskiydmi/AppData/Local/nvim/tests/run.lua [filter]
+  -l C:/Users/pesotskiydmi/AppData/Local/nvim/plugins-local/mssql/tests/run.lua [filter]
 ```
 
 The sqlkit plugin has its own specs and runner (run after any change to
@@ -79,7 +80,7 @@ The sqlkit plugin has its own specs and runner (run after any change to
 
 SQL can be verified for real before shipping it: MCP servers `mssqlclient-*`
 (esql/dgsql/crocus dev) execute queries directly. Use them for anything going
-into `lua/config/sql*.lua` — e.g. `string_agg`'s separator must be a literal
+into `plugins-local/mssql` — e.g. `string_agg`'s separator must be a literal
 or variable, which only shows up when the server rejects it.
 
 `stylua` is not in PATH; it lives in

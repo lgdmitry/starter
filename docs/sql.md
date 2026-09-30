@@ -1,8 +1,11 @@
 # Custom MS SQL layer
 
-Not a plugin — own code on top of vim-dadbod, wired up from
-`lua/plugins/dadbod.lua`. `docs/sql-refactor.md` records why the layer is split
-this way. Specs live in `tests/sql/` (how to run them: `CLAUDE.md`).
+Two local plugins on top of vim-dadbod. The commands — deploy, object lookup,
+queries, completion — are `plugins-local/mssql` (spec `lua/plugins/mssql.lua`,
+modules `mssql.*`, specs in `plugins-local/mssql/tests/`; how to run them:
+`CLAUDE.md`). The connection list stays in the config (`lua/config/sqldbs.lua`,
+loaded from `lua/plugins/dadbod.lua`): it describes this machine, not the plugin.
+`docs/sql-refactor.md` records why the layer is split this way.
 
 The pure part — tokenizer, formatter, linter, indent — is the local plugin
 `plugins-local/sqlkit` (spec `lua/plugins/sqlkit.lua`, modules `sqlkit.*`). It
@@ -11,11 +14,11 @@ knows nothing about dadbod, `sqlcmd` or connections, and has its own specs in
 
 ## Modules
 
-- `lua/config/sqlconn.lua` — transport: connections (`g:dbs` from
+- `plugins-local/mssql/lua/mssql/conn.lua` — transport: connections (`g:dbs` from
   `lua/config/sqldbs.lua`, plus `DB_UI_*` from a project `.env`), auth,
   encodings, running `sqlcmd` asynchronously with a progress spinner;
   `:SqlCancel` (`<leader>dc`) kills a running one.
-- `lua/config/sqltarget.lua` — *where* to go for a given file: which
+- `plugins-local/mssql/lua/mssql/target.lua` — *where* to go for a given file: which
   connection and which databases (see "Target resolution" below).
   `:SqlCacheClear` forgets what it cached. `:SqlWhere` (`<leader>di`) shows the
   resolved target; the lualine component (from `lua/plugins/dadbod.lua`) shows
@@ -23,23 +26,23 @@ knows nothing about dadbod, `sqlcmd` or connections, and has its own specs in
   synchronously. Viewing commands (`url_fallback`) also look in the
   connection's own URL database — first when the connection was picked by hand
   (`gK`), last otherwise; deploy stays strict.
-- `lua/config/sqlwin.lua` — the result windows: one vertical split for object
+- `plugins-local/mssql/lua/mssql/win.lua` — the result windows: one vertical split for object
   code, one bottom split for everything read as output; the next answer
   reuses the window. `b:sqlctx` in them keeps file/conn/db, so `K`,
   `:SqlRows`, `:SqlRun` inside a result window go where the result came from.
-- `lua/config/sqldeploy.lua` — `:SqlDeploy` (`<leader>dd`): deploy the
+- `plugins-local/mssql/lua/mssql/deploy.lua` — `:SqlDeploy` (`<leader>dd`): deploy the
   current `.sql` file; `:SqlDeployFiles` (and `<leader>dd` on Tab-selected
   entries in a snacks picker / explorer, action in `lua/plugins/snacks.lua`)
   deploys several at once. A file going into `icsMaster` is deployed to every
   server of the repo that has that database (dgsql: datagroup *and* billing/
-  crocus) — `sqltarget.other_servers`; only when the connection came from the
+  crocus) — `mssql.target.other_servers`; only when the connection came from the
   rules, not with `!` or an explicit connection name.
-- `lua/config/sqlobject.lua` — `:SqlDef` (`K`), `:SqlRows` (`<leader>dr`),
+- `plugins-local/mssql/lua/mssql/object.lua` — `:SqlDef` (`K`), `:SqlRows` (`<leader>dr`),
   `:SqlEnum` (`<leader>de`), `:SqlUsages` (`<leader>du`), `:SqlFile` (`gf`):
   inspect an object in the database, find where a name is used, open the
   object's file in the repo. Replaces what SQLTools used to do in Sublime
   (`desc table` / `desc function` / `show records` / `show enum`).
-- `lua/config/sqlquery.lua` — `:SqlQuery` (`<leader>dq`): a scratch query
+- `plugins-local/mssql/lua/mssql/query.lua` — `:SqlQuery` (`<leader>dq`): a scratch query
   buffer bound to the connection and database of the current file;
   `:SqlQueryFile [name]` (`<leader>dt`; not `<leader>dp` — that is LazyVim's
   profiler group): a persistent one, opened in the current window — a file
@@ -88,8 +91,8 @@ knows nothing about dadbod, `sqlcmd` or connections, and has its own specs in
   indent; +2 after `begin`/`(`; +3 after a lone `select`/`declare` and a
   procedure header; `end`/`)`/`AS`/`from`/`where`/leading comma snap to their
   pair when typed (`indentkeys`; a comma there is `0\,`, `0<,>` doesn't work).
-- `lua/config/sqlcomplete.lua` — sets `b:db` in ordinary `.sql` files (on the
-  first `InsertEnter`, by the `sqltarget` rules, never prompting), so that
+- `plugins-local/mssql/lua/mssql/complete.lua` — sets `b:db` in ordinary `.sql` files (on the
+  first `InsertEnter`, by the `mssql.target` rules, never prompting), so that
   vim-dadbod-completion completes tables and columns by alias there too —
   without `b:db` it completes nothing from the database.
 
@@ -99,7 +102,7 @@ by the rules.
 
 ## Target resolution
 
-Target server and databases are resolved by `sqltarget` from the repo's
+Target server and databases are resolved by `mssql.target` from the repo's
 `.claude/repo-conventions.json` (the same rules the `deploy-commit` skill
 uses): server by the top folder's environment, address from
 `.mcp.environments.json`; databases from the file's own `usBases ... OptionsDB`
@@ -131,4 +134,4 @@ and the output it reads back are ANSI — Cyrillic breaks in the *result*, not
 just in the query. `sqlcmd`'s own output codepage is not worth relying on
 either (`-f i:65001` vs `-f 65001` vs a BOM all behave differently, and it
 seems to mirror whatever encoding it detected in the input file); detect the
-bytes instead, which is what `sqlconn.output_to_utf8` does.
+bytes instead, which is what `mssql.conn.output_to_utf8` does.

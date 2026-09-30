@@ -1,4 +1,4 @@
--- Куда идёт файл: подключение и базы по правилам репозитория (config.sqltarget).
+-- Куда идёт файл: подключение и базы по правилам репозитория (mssql.target).
 
 local t = require("helpers")
 local describe, it, eq = t.describe, t.it, t.eq
@@ -9,7 +9,7 @@ local SERVERS, CONNS, ROOT, PLAIN = fx.SERVERS, fx.CONNS, fx.ROOT, fx.PLAIN
 local function setup()
   local sql = t.fresh()
   local log = t.stub_sql(sql, SERVERS, CONNS)
-  return require("config.sqltarget"), sql, log
+  return require("mssql.target"), sql, log
 end
 
 local conn = fx.conn

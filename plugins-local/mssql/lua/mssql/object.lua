@@ -3,7 +3,7 @@
 -- текст сообщения по номеру.
 -- Замена тому, что раньше делал SQLTools в Sublime (desc table / desc function /
 -- show records / show enum), только сервер и база не спрашиваются, а берутся по тем же
--- правилам, что у :SqlDeploy (см. config.sqltarget).
+-- правилам, что у :SqlDeploy (см. mssql.target).
 --
 -- В sql-буферах и в окне с ответом:
 --   K            — код объекта под курсором или выделенного, а на числе — текст
@@ -21,9 +21,9 @@
 -- Имя можно назвать явно: :SqlDef dbo.dc_UpdDocument, :SqlDef icsMaster.dbo.usBases,
 -- :50SqlRows tEmploy. С ! (:SqlDef!) подключение спрашивается.
 
-local sql = require("config.sqlconn")
-local target = require("config.sqltarget")
-local sqlwin = require("config.sqlwin")
+local sql = require("mssql.conn")
+local target = require("mssql.target")
+local sqlwin = require("mssql.win")
 
 local M = {}
 
@@ -534,7 +534,7 @@ function M.setup()
   -- K в sql-буферах не перебивается hover-маппингом LazyVim: тот отключён для
   -- filetype sql в спеке nvim-lspconfig (см. lua/plugins/dadbod.lua). Глобальным K
   -- быть не может — везде, кроме sql, это hover от LSP. Сами клавиши (K, gK, gf)
-  -- описаны в config.sqlwin: в окнах с ответом он вешает их сам.
+  -- описаны в mssql.win: в окнах с ответом он вешает их сам.
   vim.api.nvim_create_autocmd("FileType", {
     group = vim.api.nvim_create_augroup("sqlobject_keys", { clear = true }),
     pattern = "sql",

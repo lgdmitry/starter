@@ -8,7 +8,7 @@
 -- (autoload/db/adapter/sqlserver.vim), а без флага sqlcmd отдаёт вывод в ANSI-кодировке
 -- консоли — то есть кириллица приезжает битой не в запросе, а в самом результате, и
 -- поправить это в dadbod негде: он пишет байты вывода в файл и открывает его как буфер.
--- Здесь и вход (-f i:65001), и выход (sqlconn.output_to_utf8) под нашим контролем,
+-- Здесь и вход (-f i:65001), и выход (mssql.conn.output_to_utf8) под нашим контролем,
 -- а подключение с базой берутся те же, что у :SqlDeploy для этого файла.
 --
 -- Буферы запроса двух видов (b:sqlquery):
@@ -30,15 +30,15 @@
 --   <leader>dT   — то же, но подключение и база спрашиваются
 --   (не <leader>dp: у LazyVim это группа profiler — <leader>dpp, <leader>dph, <leader>dps)
 --   <leader>dx   — выполнить выделенное (в визуальном режиме)
---   <leader>dc   — прервать выполняющийся sqlcmd (:SqlCancel, см. config.sqlconn)
+--   <leader>dc   — прервать выполняющийся sqlcmd (:SqlCancel, см. mssql.conn)
 -- В самом буфере запроса <leader>dx работает и в обычном режиме — на весь буфер,
 -- <leader>ds (:SqlConn) меняет его подключение и базу, а q закрывает окно, как и в окне
 -- с ответом (ценой записи макросов: в черновике запроса она нужна реже, чем закрыть его
 -- тем же движением, что и ответ). С ! (:SqlQuery!, :SqlRun!) спрашиваются подключение и база.
 
-local sql = require("config.sqlconn")
-local target = require("config.sqltarget")
-local sqlwin = require("config.sqlwin")
+local sql = require("mssql.conn")
+local target = require("mssql.target")
+local sqlwin = require("mssql.win")
 
 local M = {}
 
@@ -145,7 +145,7 @@ local function scratch_name(buf, conn, database)
 end
 
 ---Привязать буфер запроса к подключению и базе. b:sqlctx — та же переменная, что у окон
----с ответом (config.sqlwin): благодаря ей K, <leader>dr и новый <leader>dq отсюда
+---с ответом (mssql.win): благодаря ей K, <leader>dr и новый <leader>dq отсюда
 ---идут в эту же базу, а не в ту, которую вычислили бы по имени буфера; b:db — для
 ---дополнения таблиц и колонок (vim-dadbod-completion).
 local function bind(buf, conn, database, file)

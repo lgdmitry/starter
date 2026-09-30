@@ -1,4 +1,4 @@
--- Буферы запроса (config.sqlquery): временный и постоянный, привязка к подключению,
+-- Буферы запроса (mssql.query): временный и постоянный, привязка к подключению,
 -- наследование его новым буфером и смена через :SqlConn.
 
 local t = require("helpers")
@@ -28,7 +28,7 @@ local function setup()
   vim.cmd("silent edit! " .. vim.fn.fnameescape(FILE))
   local sql = t.fresh()
   local log = t.stub_sql(sql, F.SERVERS, F.CONNS)
-  local q = require("config.sqlquery")
+  local q = require("mssql.query")
   q.dir = vim.fs.normalize(vim.fn.tempname()) .. "/sqlquery"
   q.setup()
   return q, log

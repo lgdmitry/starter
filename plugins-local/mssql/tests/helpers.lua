@@ -64,11 +64,11 @@ end
 ---видеть чужие.
 function M.fresh()
   for name in pairs(package.loaded) do
-    if name:match("^config%.sql") then
+    if name:match("^mssql%.") then
       package.loaded[name] = nil
     end
   end
-  return require("config.sqlconn")
+  return require("mssql.conn")
 end
 
 ---URL вида sqlserver://host/db — dadbod под -u NONE не загружен, разбираем сами.

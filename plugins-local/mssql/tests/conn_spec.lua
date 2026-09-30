@@ -1,4 +1,4 @@
--- Как зовётся sqlcmd: флаги, кодировки, URL (config.sqlconn).
+-- Как зовётся sqlcmd: флаги, кодировки, URL (mssql.conn).
 
 local t = require("helpers")
 local describe, it, eq = t.describe, t.it, t.eq

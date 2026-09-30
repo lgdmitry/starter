@@ -21,7 +21,7 @@ local by_mtime = {
 }
 
 -- Выкладка выделенного: отметить записи Tab и нажать <leader>dd — файлы уедут в базы
--- по тем же правилам, что и :SqlDeploy для открытого файла (config.sqldeploy).
+-- по тем же правилам, что и :SqlDeploy для открытого файла (mssql.deploy).
 -- Маппинг буферный и такой же, как глобальный: без него <leader>dd в окне пикера
 -- сработал бы глобальный и попробовал выложить сам буфер пикера, то есть ничего.
 -- <leader>dD — то же, но подключение спрашивается (один раз на всю пачку).
@@ -35,7 +35,7 @@ local function deploy_action(pick)
     if picker.opts.source ~= "explorer" then
       picker:close()
     end
-    require("config.sqldeploy").deploy_files(files, { pick = pick })
+    require("mssql.deploy").deploy_files(files, { pick = pick })
   end
 end
 

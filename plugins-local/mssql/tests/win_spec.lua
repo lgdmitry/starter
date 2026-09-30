@@ -1,4 +1,4 @@
--- Окна с ответом (config.sqlwin): два места на всё, следующий ответ — в готовое окно.
+-- Окна с ответом (mssql.win): два места на всё, следующий ответ — в готовое окно.
 
 local t = require("helpers")
 local describe, it, eq = t.describe, t.it, t.eq
@@ -7,7 +7,7 @@ local function reset()
   vim.cmd("silent! only")
   vim.cmd("enew!")
   t.fresh()
-  return require("config.sqlwin"), vim.api.nvim_get_current_win()
+  return require("mssql.win"), vim.api.nvim_get_current_win()
 end
 
 local function sqlwins()
@@ -84,11 +84,11 @@ describe("клавиши", function()
     end
   end)
   it(
-    "окно не тянет за собой sqlobject — зависимость только в одну сторону",
+    "окно не тянет за собой mssql.object — зависимость только в одну сторону",
     function()
       local sqlwin = reset()
       sqlwin.show({ title = "a", text = "1", bottom = true })
-      eq(nil, package.loaded["config.sqlobject"])
+      eq(nil, package.loaded["mssql.object"])
     end
   )
   it("q закрывает и возвращает в исходное окно", function()

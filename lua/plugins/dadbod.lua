@@ -5,8 +5,9 @@
 -- dadbod-ui и слой тоже подхватывают (tpope/vim-dotenv), но одноимённые из g:dbs главнее.
 require("config.sqldbs")
 
--- Свои команды поверх dadbod. Общее лежит в трёх модулях: config.sqlconn (как звать
--- sqlcmd), config.sqltarget (куда идти для этого файла), config.sqlwin (окна с ответом):
+-- Свои команды поверх dadbod — локальный плагин mssql (lua/plugins/mssql.lua). Общее
+-- лежит в трёх модулях: mssql.conn (как звать sqlcmd), mssql.target (куда идти для этого
+-- файла), mssql.win (окна с ответом):
 --   :SqlDeploy (<leader>dd), :SqlDeployFiles — выложить .sql файл(ы) в базу
 --   :SqlDef (K, gK), :SqlRows (<leader>dr), :SqlEnum (<leader>de) — объект в базе
 --   :SqlUsages (<leader>du) — где в базах используется имя; :SqlFile (gf) — файл объекта
@@ -17,14 +18,8 @@ require("config.sqldbs")
 --   :SqlCancel (<leader>dc) — прервать выполняющийся sqlcmd (запросы асинхронные)
 --   :SqlFormat (<leader>df) — форматировать диапазон по стандарту dgsql/esql (sqlkit)
 --   :SqlLint — диагностика по тому же стандарту на изменённых строках (! — весь файл)
---   config.sqlcomplete — b:db для дополнения из базы в обычных .sql файлах
--- Спеки — tests/sql/ (sqlkit — plugins-local/sqlkit/tests/), запуск описан в tests/run.lua.
-require("config.sqlconn").setup()
-require("config.sqltarget").setup()
-require("config.sqldeploy").setup()
-require("config.sqlobject").setup()
-require("config.sqlquery").setup()
-require("config.sqlcomplete").setup()
+--   mssql.complete — b:db для дополнения из базы в обычных .sql файлах
+-- Спеки — plugins-local/{mssql,sqlkit}/tests/, запуск описан в tests/run.lua каждого.
 
 -- sqlfluff из extra lang.sql убран целиком. Форматтером (conform, автоформат при
 -- сохранении) он переписывал весь файл, а стандарт dgsql/esql применяется только к
@@ -70,14 +65,14 @@ return {
     dependencies = { "tpope/vim-dotenv" },
   },
   -- Подключение, сервер и база в строке статуса — чтобы до <leader>dd было видно, куда
-  -- уедет файл. Что именно и когда оно известно — см. sqltarget.statusline.
+  -- уедет файл. Что именно и когда оно известно — см. mssql.target.statusline.
   {
     "nvim-lualine/lualine.nvim",
     optional = true,
     opts = function(_, opts)
       table.insert(opts.sections.lualine_x, 1, {
         function()
-          return require("config.sqltarget").statusline()
+          return require("mssql.target").statusline()
         end,
         cond = function()
           return vim.b.sqltarget ~= nil or vim.b.sqlctx ~= nil
@@ -96,7 +91,7 @@ return {
   -- нельзя: LazyVim ставит K через Snacks.keymap с debounce 100мс после LspAttach,
   -- то есть всегда последним. Поэтому переопределяем саму запись:
   --   has = "hover" — ставить K только если клиент реально умеет hover;
-  --   enabled       — в sql-буферах K всегда наш, :SqlDef (см. config.sqlobject).
+  --   enabled       — в sql-буферах K всегда наш, :SqlDef (см. mssql.object).
   -- То же с gK (signature help): в sql-буферах это :SqlDef! — объект на другом сервере.
   {
     "neovim/nvim-lspconfig",

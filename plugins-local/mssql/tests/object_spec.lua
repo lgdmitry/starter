@@ -1,4 +1,4 @@
--- Просмотр объектов (config.sqlobject): только то, что не требует живого сервера.
+-- Просмотр объектов (mssql.object): только то, что не требует живого сервера.
 
 local t = require("helpers")
 local describe, it, eq = t.describe, t.it, t.eq
@@ -18,7 +18,7 @@ local function setup(reply)
     log.sqlcmd[#log.sqlcmd + 1] = db
     return reply(on_done)
   end
-  return require("config.sqlobject"), log
+  return require("mssql.object"), log
 end
 
 describe(":SqlDef", function()

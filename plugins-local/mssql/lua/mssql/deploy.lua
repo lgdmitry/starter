@@ -6,7 +6,7 @@
 -- Здесь sqlcmd явно получает -f i:65001, а вдобавок -b/-r (ненулевой код
 -- возврата при ошибке), выбор сервера и баз — в :DB этого нет.
 --
--- Куда выкладывать — по правилам репозитория, см. config.sqltarget.
+-- Куда выкладывать — по правилам репозитория, см. mssql.target.
 --
 -- Несохранённый буфер сохраняется сам: sqlcmd читает файл с диска, и без этого
 -- выложилась бы предыдущая версия — молча и незаметно.
@@ -14,15 +14,15 @@
 -- Подключение можно назвать явно: :SqlDeploy! или :SqlDeploy <подключение> [база].
 --
 -- В sql-буферах: <leader>dd — выложить, <leader>dD — выложить, выбрав подключение,
--- <leader>dc — прервать выкладку (:SqlCancel, см. config.sqlconn).
+-- <leader>dc — прервать выкладку (:SqlCancel, см. mssql.conn).
 --
 -- Пачкой: :SqlDeployFiles <файлы> и то же <leader>dd по выделенным (Tab) записям в
 -- snacks-пикере и explorer (действие заведено в lua/plugins/snacks.lua); с выбором
 -- подключения — :SqlDeployFiles! и <leader>dD там же.
 
-local sql = require("config.sqlconn")
-local target = require("config.sqltarget")
-local sqlwin = require("config.sqlwin")
+local sql = require("mssql.conn")
+local target = require("mssql.target")
+local sqlwin = require("mssql.win")
 
 local M = {}
 
@@ -77,7 +77,7 @@ end
 ---пикере (см. M.deploy_files).
 ---
 ---also — другие серверы для того же файла (icsMaster живёт и на datagroup, и на
----биллинге, см. sqltarget.other_servers): туда идут те же шаги, только в свои базы.
+---биллинге, см. mssql.target.other_servers): туда идут те же шаги, только в свои базы.
 ---@param jobs { conn: table, databases: string[], file: string, how: string?, also: { conn: table, databases: string[] }[]? }[]
 local function run_jobs(jobs)
   local steps = {}
@@ -190,7 +190,7 @@ local function run_jobs(jobs)
   step(1)
 end
 
----Один файл — форма колбэка sqltarget.pick.
+---Один файл — форма колбэка mssql.target.pick.
 ---@param by_rules boolean подключение выбрано правилами — тогда и на другие серверы
 local function runner(by_rules)
   return function(conn, databases, file, how)

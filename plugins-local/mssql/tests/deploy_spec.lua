@@ -1,4 +1,4 @@
--- Выкладка пачкой (config.sqldeploy.deploy_files): куда уезжает каждый файл.
+-- Выкладка пачкой (mssql.deploy.deploy_files): куда уезжает каждый файл.
 
 local t = require("helpers")
 local describe, it, eq = t.describe, t.it, t.eq
@@ -25,7 +25,7 @@ local function deploy(files, opts, choose)
   local paths = vim.tbl_map(function(f)
     return fx.ROOT .. "/" .. f
   end, files)
-  require("config.sqldeploy").deploy_files(paths, opts)
+  require("mssql.deploy").deploy_files(paths, opts)
   vim.wait(200, function()
     local last = log.notes[#log.notes]
     return last and last.msg:find("^готово") ~= nil
@@ -79,7 +79,7 @@ describe("deploy_files", function()
       return {}
     end
     -- silent: иначе :write печатает «... written» посреди вывода раннера
-    vim.cmd("silent lua require('config.sqldeploy').deploy({ fargs = {} })")
+    vim.cmd("silent lua require('mssql.deploy').deploy({ fargs = {} })")
     vim.wait(200, function()
       return seen ~= nil
     end)
