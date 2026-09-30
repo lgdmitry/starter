@@ -1,10 +1,10 @@
--- Линтер (config.sqllint): нарушения — примеры «Заборонено» из tsql-style.md, чистое —
+-- Линтер (sqlkit.lint): нарушения — примеры «Заборонено» из tsql-style.md, чистое —
 -- «Правильно» оттуда же.
 
 local t = require("helpers")
 local describe, it, eq = t.describe, t.it, t.eq
 
-local lint = require("config.sqllint")
+local lint = require("sqlkit.lint")
 
 ---Находки как «строка:код» (строки с 1) — читать проще, чем таблицы.
 local function found(src)

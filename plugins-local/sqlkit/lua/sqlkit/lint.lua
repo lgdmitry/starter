@@ -18,7 +18,7 @@
 -- тем, как она должна выглядеть. Так правила форматирования живут в одном месте и
 -- линтер с форматтером не могут разойтись.
 
-local tok = require("config.sqltoken")
+local tok = require("sqlkit.token")
 local lower, operand, is_comment = tok.lower, tok.operand, tok.is_comment
 
 local M = {}
@@ -1022,7 +1022,7 @@ end
 ---@param set true|table<integer, boolean>
 ---@param opts? { tabstop?: integer }
 function M.unformatted(lines, set, opts)
-  local fmt = require("config.sqlformat")
+  local fmt = require("sqlkit.format")
   local out = set == true and fmt.format(lines, 1, #lines, opts) or fmt.format_lines(lines, set, opts)
   local diags = {}
   for l, line in ipairs(lines) do

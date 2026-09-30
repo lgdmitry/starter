@@ -27,7 +27,7 @@
 
 local M = {}
 
-local tok = require("config.sqltoken")
+local tok = require("sqlkit.token")
 local set, lower, is_comment, is_keyword, operand = tok.set, tok.lower, tok.is_comment, tok.is_keyword, tok.operand
 local FUNCTIONS, TYPES, KEYWORDS, DDL = tok.FUNCTIONS, tok.TYPES, tok.KEYWORDS, tok.DDL
 local DATE_FUNCS, DATE_PARTS, BINARY, width = tok.DATE_FUNCS, tok.DATE_PARTS, tok.BINARY, tok.width
@@ -717,7 +717,7 @@ end
 ---operatorfunc для <leader>df: без аргумента ставит себя и возвращает g@.
 function M.operator(kind)
   if kind == nil then
-    vim.o.operatorfunc = "v:lua.require'config.sqlformat'.operator"
+    vim.o.operatorfunc = "v:lua.require'sqlkit.format'.operator"
     return "g@"
   end
   local view = vim.fn.winsaveview()

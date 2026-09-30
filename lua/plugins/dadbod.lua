@@ -15,22 +15,20 @@ require("config.sqldbs")
 --                                подключение буфера запроса
 --   :SqlWhere (<leader>di), :SqlCacheClear — куда пойдут команды, забыть кэши правил
 --   :SqlCancel (<leader>dc) — прервать выполняющийся sqlcmd (запросы асинхронные)
---   :SqlFormat (<leader>df) — форматировать диапазон по стандарту dgsql/esql
+--   :SqlFormat (<leader>df) — форматировать диапазон по стандарту dgsql/esql (sqlkit)
 --   :SqlLint — диагностика по тому же стандарту на изменённых строках (! — весь файл)
 --   config.sqlcomplete — b:db для дополнения из базы в обычных .sql файлах
--- Спеки — tests/sql/, запуск описан в tests/run.lua.
+-- Спеки — tests/sql/ (sqlkit — plugins-local/sqlkit/tests/), запуск описан в tests/run.lua.
 require("config.sqlconn").setup()
 require("config.sqltarget").setup()
 require("config.sqldeploy").setup()
 require("config.sqlobject").setup()
 require("config.sqlquery").setup()
 require("config.sqlcomplete").setup()
-require("config.sqlformat").setup()
-require("config.sqllint").setup()
 
 -- sqlfluff из extra lang.sql убран целиком. Форматтером (conform, автоформат при
 -- сохранении) он переписывал весь файл, а стандарт dgsql/esql применяется только к
--- новым и изменённым строкам — для этого есть :SqlFormat (config.sqlformat). Линтером
+-- новым и изменённым строкам — для этого есть :SqlFormat (sqlkit.format). Линтером
 -- с --dialect=ansi он на T-SQL давал сплошной шум, а правил стандарта всё равно не знает.
 local sql_ft = { "sql", "mysql", "plsql" }
 local function without_sqlfluff(list)

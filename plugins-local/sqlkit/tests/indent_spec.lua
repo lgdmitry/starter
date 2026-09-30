@@ -1,9 +1,9 @@
--- Отступ новой строки (config.sqlindent): последняя строка текста — та, что набирается.
+-- Отступ новой строки (sqlkit.indent): последняя строка текста — та, что набирается.
 
 local t = require("helpers")
 local describe, it, eq = t.describe, t.it, t.eq
 
-local ind = require("config.sqlindent")
+local ind = require("sqlkit.indent")
 
 local function indent(src)
   local lines = vim.split(src, "\n", { plain = true })

@@ -10,7 +10,7 @@
 -- Строки разбираются поодиночке (многострочный комментарий или литерал собьёт правило
 -- на своих строках) — токенизировать весь файл на каждый <CR> ради этого не стоит.
 
-local tok = require("config.sqltoken")
+local tok = require("sqlkit.token")
 
 local M = {}
 
@@ -245,7 +245,7 @@ end
 ---Буферу sql — свой indentexpr (из indent/sql.lua).
 function M.attach(buf)
   local bo = vim.bo[buf]
-  bo.indentexpr = "v:lua.require'config.sqlindent'.indentexpr()"
+  bo.indentexpr = "v:lua.require'sqlkit.indent'.indentexpr()"
   -- переотступ при наборе: `end`, `)` и запятая в начале строки, клаузы запроса
   -- (`0\,` — запятая; `0<,>` Vim не понимает)
   bo.indentkeys = [[0=~end,0),0\,,0=~as,0=~from,0=~where,0=~group,0=~order,0=~having,0=~union,!^F,o,O]]

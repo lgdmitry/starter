@@ -11,7 +11,7 @@ change a module, update its document **in the same commit**.
 
 | Topic | File |
 | --- | --- |
-| Custom MS SQL layer: `lua/config/sql*.lua`, target resolution, `sqlcmd` encodings | `docs/sql.md` |
+| Custom MS SQL layer: `lua/config/sql*.lua` and the local plugin `plugins-local/sqlkit` (formatter, linter, indent), target resolution, `sqlcmd` encodings | `docs/sql.md` |
 | Why the SQL layer is split the way it is | `docs/sql-refactor.md` |
 | Keyboard layout switching, why no cyrillic mappings | `docs/keyboard.md` |
 
@@ -67,6 +67,14 @@ server and repo from `tests/fixtures.lua`). Run them after any change to
 ```bash
 "/c/Program Files/Neovim/bin/nvim.exe" --headless -u NONE \
   -l C:/Users/pesotskiydmi/AppData/Local/nvim/tests/run.lua [filter]
+```
+
+The sqlkit plugin has its own specs and runner (run after any change to
+`plugins-local/sqlkit`):
+
+```bash
+"/c/Program Files/Neovim/bin/nvim.exe" --headless -u NONE \
+  -l C:/Users/pesotskiydmi/AppData/Local/nvim/plugins-local/sqlkit/tests/run.lua [filter]
 ```
 
 SQL can be verified for real before shipping it: MCP servers `mssqlclient-*`

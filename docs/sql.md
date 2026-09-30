@@ -4,6 +4,11 @@ Not a plugin — own code on top of vim-dadbod, wired up from
 `lua/plugins/dadbod.lua`. `docs/sql-refactor.md` records why the layer is split
 this way. Specs live in `tests/sql/` (how to run them: `CLAUDE.md`).
 
+The pure part — tokenizer, formatter, linter, indent — is the local plugin
+`plugins-local/sqlkit` (spec `lua/plugins/sqlkit.lua`, modules `sqlkit.*`). It
+knows nothing about dadbod, `sqlcmd` or connections, and has its own specs in
+`plugins-local/sqlkit/tests/` (`run.lua` there).
+
 ## Modules
 
 - `lua/config/sqlconn.lua` — transport: connections (`g:dbs` from
@@ -46,7 +51,7 @@ this way. Specs live in `tests/sql/` (how to run them: `CLAUDE.md`).
   Both kinds carry `b:sqlctx`, so a query buffer opened from a query buffer
   inherits its connection instead of the rules.
   `:SqlRun` (`<leader>dx`) runs it, or the visual selection in any sql buffer.
-- `lua/config/sqlformat.lua` — `:SqlFormat` (`<leader>df`, operator in normal
+- `plugins-local/sqlkit/lua/sqlkit/format.lua` — `:SqlFormat` (`<leader>df`, operator in normal
   mode, selection in visual; sql buffers only): format T-SQL by the dgsql/esql
   standard (skill `mssql-repo-skills:sql-standards`, `tsql-style.md`). Only the
   range, never the whole file on save — the standard applies to new/changed
@@ -59,7 +64,7 @@ this way. Specs live in `tests/sql/` (how to run them: `CLAUDE.md`).
   Line count never changes. `sqlfluff` from the `lang.sql` extra is removed
   entirely (mason, nvim-lint, conform — `lua/plugins/dadbod.lua`): as a
   format-on-save formatter it rewrote whole legacy files.
-- `lua/config/sqllint.lua` — `:SqlLint`: `vim.diagnostic` (source `sqllint`,
+- `plugins-local/sqlkit/lua/sqlkit/lint.lua` — `:SqlLint`: `vim.diagnostic` (source `sqllint`,
   message starts with the rule anchor `S20: …`) by the same standard, only on
   lines changed vs git — gitsigns hunks, re-run on `User GitSignsUpdate`; a
   file not yet added to git counts as new entirely (gitsigns doesn't attach
@@ -68,15 +73,15 @@ this way. Specs live in `tests/sql/` (how to run them: `CLAUDE.md`).
   WARN, structural ones are HINT — heuristics over a pre-pass (`annotate`:
   paren depth, GO batches, the procedure and its END, begin/try/case stack),
   since T-SQL without semicolons only parses roughly from tokens. The current
-  rule list is in `sqllint.lua` itself. Rules that need the schema (FK,
+  rule list is in `lint.lua` itself. Rules that need the schema (FK,
   DEFAULT, column types) are out of scope. What `:SqlFormat` fixes by itself
   (case, spacing, alignment) has no rules of its own: the changed lines are run
-  through the formatter dry (`sqlformat.format_lines`), and a line it would
+  through the formatter dry (`sqlkit.format.format_lines`), and a line it would
   rewrite gets a WARN `SqlFormat: … → <how it should look>` — so the two can't
   diverge. The tokenizer and word lists are shared with the formatter in
-  `lua/config/sqltoken.lua`.
-- `lua/config/sqlindent.lua` — `indentexpr` for sql buffers, set from
-  `indent/sql.lua` (config dir is ahead of `$VIMRUNTIME` in rtp, and
+  `plugins-local/sqlkit/lua/sqlkit/token.lua`.
+- `plugins-local/sqlkit/lua/sqlkit/indent.lua` — `indentexpr` for sql buffers, set from
+  `plugins-local/sqlkit/indent/sql.lua` (plugin dir is ahead of `$VIMRUNTIME` in rtp, and
   `LazyVim.set_default` doesn't override an option set outside `$VIMRUNTIME`).
   Treesitter's sql `indents.scm` gives 0 for almost every T-SQL line and the
   runtime `indent/sql.vim` is for another dialect. Keeps the previous line's

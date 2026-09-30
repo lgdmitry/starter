@@ -1,9 +1,9 @@
--- Форматирование (config.sqlformat): ожидаемое — примеры «Правильно» из tsql-style.md.
+-- Форматирование (sqlkit.format): ожидаемое — примеры «Правильно» из tsql-style.md.
 
 local t = require("helpers")
 local describe, it, eq = t.describe, t.it, t.eq
 
-local fmt = require("config.sqlformat")
+local fmt = require("sqlkit.format")
 
 local function run(src, l1, l2)
   local lines = vim.split(src, "\n", { plain = true })
