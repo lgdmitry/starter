@@ -55,6 +55,14 @@ local STARTERS = set([[
   revoke
 ]])
 
+-- Права и связки в GRANT / DENY / REVOKE. В §13 этого нет, но шаблон процедуры (P7)
+-- пишет `GRANT EXEC ON … TO` заглавными целиком; раньше GRANT и TO оставались как
+-- есть, а EXEC и ON как ключевые слова уходили в строчные — смесь в одной строке.
+local GRANT_WORDS = set([[
+  exec execute select insert update delete references alter control view definition
+  take ownership impersonate on to as with grant option all cascade schema object
+]])
+
 -- Слово перед `(` после них — имя объекта, а не функция: insert into Format (…).
 local OBJECT_BEFORE = set("into table update join from exec execute procedure proc function view references")
 
@@ -86,7 +94,7 @@ local function case_pass(recs, sig)
   local ddl -- nil | "ddl" | "header"
   local parens = {} -- режим внутри каждой открытой скобки
   local blocks = {} -- begin/case, чтобы найти END процедуры
-  local proc_begin, set_rec, header_depth = false, nil, 0
+  local proc_begin, set_rec, grant_rec, header_depth = false, nil, nil, 0
   local converts = set("convert try_convert")
 
   for i, t in ipairs(sig) do
@@ -127,6 +135,12 @@ local function case_pass(recs, sig)
       elseif w == "go" and first_in_rec and #recs[t.ri].toks == 1 then
         edit(t, "GO")
         ddl, parens, blocks, proc_begin = nil, {}, {}, false
+      elseif (w == "grant" or w == "deny" or w == "revoke") and first_in_rec then
+        edit(t, t.s:upper())
+        grant_rec = t.ri
+      elseif grant_rec == t.ri and GRANT_WORDS[w] and not (prev and prev.k == "dot") then
+        -- до ветки create/alter: в `GRANT ALTER ON` alter — право, а не начало DDL
+        edit(t, t.s:upper())
       elseif w == "return" or w == "raiserror" then
         edit(t, t.s:upper())
       elseif (w == "create" or w == "alter" or w == "drop") and not (prev and prev.k == "dot") then
@@ -314,7 +328,16 @@ local function lead_commas(recs)
         j = j + 1
       end
       local nxt = recs[j]
-      if nxt and not is_blank(nxt) and not comma_line(nxt) and nxt.toks[1].k ~= "rparen" then
+      -- Строка левее текущей — не следующий элемент, а продолжение выражения, прижатое
+      -- к краю (длинная строка-аргумент CONCAT): с запятой в начале она стала бы
+      -- «списком» на её отступе, и comma_block сдвинул бы под него всё вокруг.
+      if
+        nxt
+        and not is_blank(nxt)
+        and not comma_line(nxt)
+        and nxt.toks[1].k ~= "rparen"
+        and nxt.indent >= rec.indent
+      then
         table.remove(toks, last)
         table.insert(nxt.toks, 1, { k = "comma", s = ",", sp = 0 })
         nxt.toks[2].sp = 0
@@ -383,6 +406,17 @@ local function comma_block(recs, j)
   end
   local parent, shared
   if f < j then
+    -- Первый элемент — одно выражение со строками-продолжениями глубже него. Новая
+    -- инструкция на его уровне значит, что запятая стоит левее своего списка и обход
+    -- назад ушёл за его начало: «элементом» оказалось бы тело процедуры целиком.
+    for r = f + 1, j - 1 do
+      local rec = recs[r]
+      if not is_blank(rec) and not comment_only(rec) and rec.indent <= recs[f].indent then
+        if STARTERS[lower(rec.toks[1]) or ""] then
+          return nil
+        end
+      end
+    end
     parent = k >= 1 and not is_blank(recs[k]) and k or nil
   elseif k >= 1 and not is_blank(recs[k]) then
     -- перед первой запятой сразу строка не глубже запятых: либо это первый элемент на

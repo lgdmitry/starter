@@ -100,6 +100,12 @@ describe("§13: что ЗАГЛАВНЫМИ", function()
   it("DDL кончается на следующей инструкции", function()
     eq("DROP TABLE IF EXISTS #Tmp\nselect 1 from x", run("drop table if exists #Tmp\nSELECT 1 FROM x"))
   end)
+  it("GRANT целиком заглавными (P7), имя объекта как есть", function()
+    eq(
+      "GRANT EXEC ON dbo.bk_Proc TO gn_DBO\nGRANT ALTER ON dbo.bk_Get TO x\nselect 1 from x",
+      run("GRANT EXEC ON dbo.bk_Proc TO gn_DBO\ngrant alter on dbo.bk_Get to x\nSELECT 1 FROM x")
+    )
+  end)
 end)
 
 describe("списки с ведущими запятыми", function()
@@ -153,6 +159,39 @@ describe("списки с ведущими запятыми", function()
     "колонку `=` задаёт самое длинное имя, прежнее выравнивание не в счёт",
     function()
       eq("exec x\n   @a          = 1\n  ,@LongerName = 2", run("exec x\n   @a      = 1\n  ,@LongerName = 2"))
+    end
+  )
+  it(
+    "висячая запятая перед строкой левее — продолжение выражения, не список",
+    function()
+      local src = table.concat({
+        "CREATE PROCEDURE dbo.x",
+        "AS BEGIN",
+        "  SET NOCOUNT ON;",
+        "  if @a = 1",
+        "  begin",
+        "    set @msg = CONCAT('a', @msg,",
+        "'b' + (",
+        "      select 1), 'c')",
+        "  end",
+        "END",
+      }, "\n")
+      eq(src, run(src))
+    end
+  )
+  it(
+    "запятая левее своего списка не утягивает в него инструкции вокруг",
+    function()
+      local src = table.concat({
+        "CREATE PROCEDURE dbo.x",
+        "AS BEGIN",
+        "  SET NOCOUNT ON;",
+        "  set @x = 1",
+        "  set @msg = CONCAT('a', @msg",
+        ",'b')",
+        "END",
+      }, "\n")
+      eq(src, run(src))
     end
   )
 end)
