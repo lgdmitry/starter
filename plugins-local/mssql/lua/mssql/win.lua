@@ -122,6 +122,10 @@ function M.show(o)
   vim.api.nvim_win_set_cursor(0, { 1, 0 })
   if o.focus == false and vim.api.nvim_win_is_valid(from) then
     vim.api.nvim_set_current_win(from)
+  else
+    -- <F5> жмут и из режима вставки, а окно ответа нередактируемое: в insert тут
+    -- можно только упереться в «modifiable is off», так что ответ читаем из normal
+    vim.cmd("stopinsert")
   end
 end
 

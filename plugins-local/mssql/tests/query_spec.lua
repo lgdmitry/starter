@@ -270,12 +270,26 @@ describe("постоянный запрос", function()
     vim.cmd("silent write")
     eq({ conn = "crocus_dev", db = "Crocus", file = "" }, vim.b.sqlctx)
   end)
-  it("клавиши буферные: <leader>dx, <leader>ds, q", function()
+  it("клавиши буферные: <leader>dx, <leader>ds, q, <F5>", function()
     local q = setup()
     q.open_file({ args = "", bang = false })
     vim.cmd("stopinsert")
-    for _, lhs in ipairs({ "<leader>dx", "<leader>ds", "q" }) do
+    for _, lhs in ipairs({ "<leader>dx", "<leader>ds", "q", "<F5>" }) do
       eq(1, vim.fn.maparg(lhs, "n", false, true).buffer, lhs)
+    end
+    eq(1, vim.fn.maparg("<F5>", "i", false, true).buffer, "<F5> в insert")
+  end)
+  it("<F5>: в запросе — выполнить, в файле — выложить", function()
+    local q = setup()
+    require("mssql.deploy").setup()
+    q.open_file({ args = "", bang = false })
+    vim.cmd("stopinsert")
+    for _, mode in ipairs({ "n", "i" }) do
+      eq("<Cmd>SqlRun<CR>", vim.fn.maparg("<F5>", mode), "запрос, " .. mode)
+    end
+    vim.cmd("enew!")
+    for _, mode in ipairs({ "n", "i" }) do
+      eq("<Cmd>SqlDeploy<CR>", vim.fn.maparg("<F5>", mode), "файл, " .. mode)
     end
   end)
 end)

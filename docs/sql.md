@@ -30,8 +30,10 @@ knows nothing about dadbod, `sqlcmd` or connections, and has its own specs in
   code, one bottom split for everything read as output; the next answer
   reuses the window. `b:sqlctx` in them keeps file/conn/db, so `K`,
   `:SqlRows`, `:SqlRun` inside a result window go where the result came from.
-- `plugins-local/mssql/lua/mssql/deploy.lua` — `:SqlDeploy` (`<leader>dd`): deploy the
-  current `.sql` file; `:SqlDeployFiles` (and `<leader>dd` on Tab-selected
+  A focused result window always starts in normal mode, even when `<F5>` was
+  pressed in insert.
+- `plugins-local/mssql/lua/mssql/deploy.lua` — `:SqlDeploy` (`<leader>dd`,
+  `<F5>` in normal/insert): deploy the current `.sql` file; `:SqlDeployFiles` (and `<leader>dd` on Tab-selected
   entries in a snacks picker / explorer, action in `lua/plugins/snacks.lua`)
   deploys several at once. A file going into `icsMaster` is deployed to every
   server of the repo that has that database (dgsql: datagroup *and* billing/
@@ -57,7 +59,9 @@ knows nothing about dadbod, `sqlcmd` or connections, and has its own specs in
   database for the current query buffer and renames an auto-named file.
   Both kinds carry `b:sqlctx`, so a query buffer opened from a query buffer
   inherits its connection instead of the rules.
-  `:SqlRun` (`<leader>dx`) runs it, or the visual selection in any sql buffer.
+  `:SqlRun` (`<leader>dx`, or `<F5>` in any mode, insert included — it
+  overrides the deploy `<F5>` in query buffers) runs it, or the visual
+  selection in any sql buffer.
 - `plugins-local/sqlkit/lua/sqlkit/format.lua` — `:SqlFormat` (`<leader>df`, operator in normal
   mode, selection in visual; sql buffers only): format T-SQL by the dgsql/esql
   standard (skill `mssql-repo-skills:sql-standards`, `tsql-style.md`). Only the

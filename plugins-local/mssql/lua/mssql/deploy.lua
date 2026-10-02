@@ -14,7 +14,8 @@
 -- Подключение можно назвать явно: :SqlDeploy! или :SqlDeploy <подключение> [база].
 -- В постоянном запросе (mssql.query) подключение и база — его собственные (b:sqlctx).
 --
--- В sql-буферах: <leader>dd — выложить, <leader>dD — выложить, выбрав подключение,
+-- В sql-буферах: <leader>dd (и <F5>, в том числе из insert) — выложить,
+-- <leader>dD — выложить, выбрав подключение,
 -- <leader>dc — прервать выкладку (:SqlCancel, см. mssql.conn).
 --
 -- Пачкой: :SqlDeployFiles <файлы> и то же <leader>dd по выделенным (Tab) записям в
@@ -348,6 +349,10 @@ function M.setup()
   end
   map("<leader>dd", "<cmd>SqlDeploy<cr>", "Выложить .sql через sqlcmd")
   map("<leader>dD", "<cmd>SqlDeploy!<cr>", "Выложить .sql, выбрав подключение")
+  -- <F5> — «запустить» одной клавишей во всех режимах, включая insert (через <leader>
+  -- туда не дотянуться, см. mssql.query): в файле — выложить, а в буфере запроса его
+  -- перекрывает буферный <F5> — выполнить запрос.
+  vim.keymap.set({ "n", "i" }, "<F5>", "<cmd>SqlDeploy<cr>", { desc = "Выложить .sql через sqlcmd" })
 
   vim.api.nvim_create_user_command("SqlDeploy", M.deploy, {
     nargs = "*",
