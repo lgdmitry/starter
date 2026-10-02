@@ -555,7 +555,7 @@ end
 ---------------------------------------------------------------------------------------
 -- Структурные правила (HINT). Получают ещё ctx из annotate: батчи и процедуры в них.
 
-local STRUCT = tok.set("S7 S9 S22 S24 S32 S34 S51 S55 S64 S65")
+local STRUCT = tok.set("S7 S9 S22 S24 S32 S34 S51 S55 S64 S65 A2 A6 B1")
 
 ---Батчи с процедурой: только к ним относится «в начале / в конце процедуры».
 local function procs(ctx)
@@ -923,17 +923,382 @@ function rules.get_order(sig, add, ctx)
 end
 
 ---------------------------------------------------------------------------------------
+-- Гигиена переменных и алиасов: скилл mssql-repo-skills:task-blockers, §A.2 / §A.6 /
+-- §B.1 (там же hygiene.awk — то же самое, но построчными регулярками).
+--
+-- Находка про объявление стоит на строке declare, а появиться может от правки совсем
+-- в другом месте (удалили последнее чтение) — по одним изменённым строкам её бы не
+-- было видно. Поэтому эти правила передают в add span батча и показываются, если в
+-- батче (процедуре) изменена хоть одна строка.
+
+-- Слова, открывающие список: по ближайшему из них решаем, чем переменная в этом месте
+-- является — целью присваивания (select / set), целью into, именем параметра exec или
+-- просто чтением. top здесь нет: в select top 1 @a = x решает select.
+local CLAUSE = tok.set([[
+  select set where on and or when then else having from join if while return exec execute
+  declare into values by not case print raiserror begin end
+]])
+local COMPOUND = tok.set("+= -= *= /= %= &= |= ^=")
+
+---Ближайшее слово из CLAUSE на той же глубине перед j (или начало инструкции), или nil,
+---если раньше кончилась скобка, в которой стоит j. case … end перед j пропускается
+---целиком: в select @a = case … end, @b = x решает select, а не when / end.
+local function clause_of(sig, j, first)
+  local d, cases = sig[j].d, 0
+  for k = j - 1, first, -1 do
+    local s = sig[k]
+    if s.d < d then
+      return nil
+    end
+    if s.d == d then
+      if s.closes == "case" then
+        cases = cases + 1
+      elseif cases > 0 then
+        cases = cases - (is_word(s, "case") and 1 or 0)
+      elseif CLAUSE[lower(s) or ""] or (line_start(sig, k) and stmt_word(sig, k)) then
+        return k
+      end
+    end
+  end
+end
+
+---Что делает с переменной токен j: "read", "write", "rw" (set @s += …) или "skip" —
+---имя параметра вызываемой процедуры в exec p @Param = @x, к этой процедуре не
+---относится (а значение справа от него — читается, или пишется, если out).
+local function var_role(sig, j, first)
+  local prev, nxt = sig[j - 1], sig[j + 1]
+  if is_word(nxt, "out", "output") then
+    return "write"
+  end
+  -- таблица-переменная пишется как цель DML, а не через `=`: без этого любая
+  -- declare @t table выглядела бы «никогда не заполняемой»
+  if
+    is_word(prev, "update", "delete", "merge", "insert") or (is_word(prev, "from") and is_word(sig[j - 2], "delete"))
+  then
+    return "write"
+  end
+  local assign = nxt and nxt.k == "op" and (nxt.s == "=" or COMPOUND[nxt.s])
+  local h = clause_of(sig, j, first)
+  local hw = h and lower(sig[h])
+  if hw == "into" then
+    return "write" -- fetch … into @a, @b / insert into @t / output … into @t
+  end
+  if assign and (hw == "select" or hw == "set") then
+    return COMPOUND[nxt.s] and "rw" or "write"
+  end
+  if assign and (hw == "exec" or hw == "execute") then
+    return h == j - 1 and "write" or "skip" -- exec @ret = p — это уже наша переменная
+  end
+  return "read"
+end
+
+---Объявления в батче: declare @a int = 0, @t table (…). Возвращает список
+---{ name, si, table } в порядке объявления, набор индексов самих объявлений и индексы
+---`=` инициализаторов по именам (инициализатор — тоже запись).
+local function declarations(sig, b)
+  local list, at, init = {}, {}, {}
+  for i = b.first, b.last do
+    if is_word(sig[i], "declare") then
+      local d, expect, cur = sig[i].d, true, nil
+      for j = i + 1, b.last do
+        local s = sig[j]
+        if s.d < d or s.k == "semi" and s.d == d then
+          break
+        end
+        if s.d == d then
+          -- блок declare — строки, начинающиеся с запятой или после висячей запятой
+          if j > i + 1 and line_start(sig, j) and s.k ~= "comma" and sig[j - 1].k ~= "comma" then
+            break
+          end
+          if expect then
+            if s.k ~= "var" then
+              break -- declare c cursor — курсор, не переменная
+            end
+            cur = s.s:lower()
+            list[#list + 1] = { name = cur, si = j, table = is_word(sig[j + 1], "table") }
+            at[j], expect = true, false
+          elseif s.k == "comma" then
+            expect = true
+          elseif s.k == "op" and s.s == "=" and not init[cur] then
+            init[cur] = j
+          end
+        end
+      end
+    end
+  end
+  return list, at, init
+end
+
+---Строки батча (с 1) — span для add.
+local function batch_span(sig, b)
+  return { sig[b.first].l, sig[b.last].el }
+end
+
+-- §A.2: объявлена и не используется / только пишется. §A.6: читается, но нигде не
+-- присваивается (всегда NULL), или первое чтение раньше первой записи — класс, который
+-- подсчёт вхождений не видит: переменная выглядит вполне используемой.
+function rules.var_hygiene(sig, add, ctx)
+  for _, b in ipairs(ctx.batches) do
+    if b.first <= b.last then
+      local decls, at, init = declarations(sig, b)
+      if #decls > 0 then
+        local use = {}
+        local function note(name, kind, j)
+          local u = use[name] or { reads = 0, writes = 0 }
+          use[name] = u
+          if kind == "read" then
+            u.reads = u.reads + 1
+            if not u.read then
+              u.read = j
+            end
+          else
+            u.writes = u.writes + 1
+            u.write = u.write or j
+          end
+        end
+        for name, j in pairs(init) do
+          note(name, "write", j)
+        end
+        for j = b.first, b.last do
+          local t = sig[j]
+          if t.k == "var" and not at[j] and not t.s:find("^@@") then
+            local role, name = var_role(sig, j, b.first), t.s:lower()
+            if role == "rw" then
+              -- set @s += 'x' без начального значения — тоже NULL: чтение раньше записи
+              note(name, "read", j)
+              note(name, "write", j + 0.5)
+            elseif role ~= "skip" then
+              note(name, role, j)
+            end
+          end
+        end
+        local span = batch_span(sig, b)
+        for _, dcl in ipairs(decls) do
+          local u = use[dcl.name] or { reads = 0, writes = 0 }
+          local t, v = sig[dcl.si], sig[dcl.si].s
+          if u.reads == 0 and u.writes == 0 then
+            add(t, "A2", v .. " объявлена, но не используется", nil, span)
+          elseif u.reads == 0 then
+            add(
+              t,
+              "A2",
+              v
+                .. (dcl.table and " заполняется" or " присваивается")
+                .. ", но не читается",
+              nil,
+              span
+            )
+          elseif u.writes == 0 then
+            add(
+              sig[u.read],
+              "A6",
+              v
+                .. (
+                  dcl.table
+                    and " читается, но нигде не заполняется — всегда пустая"
+                  or " читается, но нигде не присваивается — всегда NULL"
+                ),
+              nil,
+              span
+            )
+          elseif u.read < u.write then
+            add(
+              sig[u.read],
+              "A6",
+              ("%s читается раньше, чем %s (строка %d) — здесь ещё %s; в цикле — проверить первую итерацию"):format(
+                v,
+                dcl.table and "заполняется" or "присваивается",
+                sig[math.floor(u.write)].l,
+                dcl.table and "пустая" or "NULL"
+              ),
+              nil,
+              span
+            )
+          end
+        end
+      end
+    end
+  end
+end
+
+-- После таблицы-источника: здесь её алиас кончился или его не было.
+local CLAUSE_END = tok.set([[
+  join inner left right full cross outer where group order having union except intersect
+  option from apply for
+]])
+
+---Источник в from / join / apply с позиции k: таблица (с точками), @t, #t, функция
+---dbo.f(…) или (подзапрос). Возвращает индекс алиаса (или nil) и индекс за источником.
+local function source_alias(sig, k)
+  local t = sig[k]
+  if not t then
+    return nil, k
+  end
+  if t.k == "lparen" then
+    k = (close_paren(sig, k) or #sig) + 1
+  elseif t.k == "word" or t.k == "ident" or t.k == "temp" or t.k == "var" then
+    while sig[k + 1] and sig[k + 1].k == "dot" and sig[k + 2] do
+      k = k + 2
+    end
+    k = k + 1
+    if sig[k] and sig[k].k == "lparen" then
+      k = (close_paren(sig, k) or #sig) + 1
+    end
+  else
+    return nil, k
+  end
+  if is_word(sig[k], "as") then
+    k = k + 1
+  end
+  local a = sig[k]
+  -- алиас — на той же строке: со следующей начинается уже следующая инструкция
+  if a and a.k == "word" and a.l == sig[k - 1].el and not tok.is_keyword(a) and not stmt_word(sig, k) then
+    return k, k + 1
+  end
+  return nil, k
+end
+
+---Где виден алиас источника в позиции i: внутри скобок — до их конца, на верхнем
+---уровне — в пределах инструкции. set после update — не новая инструкция, а её часть
+---(update t set … from T t), как и end / else от case в начале строки.
+local function alias_scope(sig, i, b)
+  local d = sig[i].d
+  if d > 0 then
+    for k = i - 1, b.first, -1 do
+      if sig[k].k == "lparen" and sig[k].d == d - 1 then
+        return k + 1, (close_paren(sig, k) or b.last + 1) - 1
+      end
+    end
+    return b.first, b.last
+  end
+  local function boundary(k)
+    local s = sig[k]
+    local part = is_word(s, "set") or s.closes == "case" or s.case_else
+    return s.d == 0 and line_start(sig, k) and ((stmt_word(sig, k) and not part) or is_word(s, "select", "with"))
+  end
+  local first, last = b.first, b.last
+  for k = i, b.first, -1 do
+    if boundary(k) then
+      first = k
+      break
+    end
+  end
+  for k = i + 1, b.last do
+    if boundary(k) then
+      last = k - 1
+      break
+    end
+  end
+  return first, last
+end
+
+-- §B.1: алиас в from / join, на который нигде не ссылаются. «Только в своём ON» —
+-- лишь у outer join: left join, из которого ничего не берут, результат не меняет (разве
+-- что размножает строки), а inner join с одним ON — обычный фильтр (update t … join
+-- @Items s on s.ID = t.ID), их в каждой процедуре десятки. Только там, где источников
+-- больше одного: в однотабличном запросе голые имена колонок однозначны.
+function rules.alias_hygiene(sig, add, ctx)
+  for _, b in ipairs(ctx.batches) do
+    local scopes, span = {}, nil
+    for i = b.first, b.last do
+      if is_word(sig[i], "from", "join", "apply") and not after_dot(sig, i) then
+        local first, last = alias_scope(sig, i, b)
+        local key = first .. ":" .. last
+        local sc = scopes[key] or { first = first, last = last, n = 0, aliases = {} }
+        scopes[key] = sc
+        local k = i + 1
+        repeat
+          local a, nxt = source_alias(sig, k)
+          sc.n = sc.n + 1
+          if a then
+            local p = is_word(sig[i - 1], "outer") and i - 2 or i - 1
+            sc.aliases[#sc.aliases + 1] = {
+              si = a,
+              join = is_word(sig[i], "join"),
+              outer = is_word(sig[i], "join") and is_word(sig[p], "left", "right", "full"),
+            }
+          end
+          -- from A a, B b — источники через запятую
+          local more = sig[nxt] and sig[nxt].k == "comma" and sig[nxt].d == sig[i].d and is_word(sig[i], "from")
+          k = nxt + 1
+        until not more
+      end
+    end
+    for _, sc in pairs(scopes) do
+      if sc.n >= 2 then
+        local seen = {}
+        for _, al in ipairs(sc.aliases) do
+          local a = sig[al.si]
+          local name = a.s:lower()
+          if not seen[name] then
+            seen[name] = true
+            -- свой ON: от on после алиаса до следующего join / where / … той же глубины
+            local on_s, on_e = math.huge, -1
+            if al.join then
+              local d = a.d
+              for k = al.si + 1, sc.last do
+                local s = sig[k]
+                if s.d < d then
+                  break
+                end
+                if s.d == d and is_word(s, "on") then
+                  on_s = k
+                elseif s.d == d and on_s < k and CLAUSE_END[lower(s) or ""] then
+                  break
+                end
+                on_e = k
+              end
+            end
+            local inside, outside, target = 0, 0, false
+            for k = sc.first, sc.last do
+              local s = sig[k]
+              local w = (s.k == "word" or s.k == "ident") and unbracket(s.s):lower()
+              if w == name then
+                if sig[k + 1] and sig[k + 1].k == "dot" and not after_dot(sig, k) then
+                  if k >= on_s and k <= on_e then
+                    inside = inside + 1
+                  else
+                    outside = outside + 1
+                  end
+                elseif is_word(sig[k - 1], "update", "delete") then
+                  target = true -- update t set … from T t: алиас — цель DML
+                end
+              end
+            end
+            if outside == 0 and not target and (inside == 0 or al.outer) then
+              span = span or batch_span(sig, b)
+              add(
+                a,
+                "B1",
+                inside > 0
+                    and ("алиас %s используется только в своём ON — outer join лишний?"):format(
+                      a.s
+                    )
+                  or ("алиас %s нигде не используется"):format(a.s),
+                nil,
+                span
+              )
+            end
+          end
+        end
+      end
+    end
+  end
+end
+
+---------------------------------------------------------------------------------------
 
 ---Найти нарушения в тексте. Строки и колонки — с 0, как у vim.diagnostic.
 ---@param lines string[]
----@return { lnum: integer, col: integer, end_lnum: integer, end_col: integer, code: string, message: string, severity: integer }[]
+---span — строки батча (с 1), если находку надо показывать при любом изменении в нём.
+---@return { lnum: integer, col: integer, end_lnum: integer, end_col: integer, code: string, message: string, severity: integer, span?: integer[] }[]
 function M.check(lines)
   local recs = tok.tokenize(table.concat(lines, "\n"), 4)
   local sig = tok.flatten(recs)
   local ctx = annotate(sig)
   ctx.recs = recs
   local out = {}
-  local function add(t, code, msg, last)
+  local function add(t, code, msg, last, span)
     last = last or t
     local tail = last.s:match("[^\n]*$")
     local nl = select(2, last.s:gsub("\n", ""))
@@ -945,6 +1310,7 @@ function M.check(lines)
       code = code,
       message = code .. ": " .. msg,
       severity = STRUCT[code] and vim.diagnostic.severity.HINT or vim.diagnostic.severity.WARN,
+      span = span,
     }
   end
   -- S1 — по сырым табам, в sp они уже раскрыты. Одна находка на строку.
@@ -1060,8 +1426,17 @@ function M.lint(buf)
   end
   local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
   local diags = {}
+  local function touched(span)
+    for l in pairs(lines_set) do
+      if l >= span[1] and l <= span[2] then
+        return true
+      end
+    end
+    return false
+  end
   for _, d in ipairs(M.check(lines)) do
-    if lines_set == true or lines_set[d.lnum + 1] then
+    if lines_set == true or lines_set[d.lnum + 1] or d.span and touched(d.span) then
+      d.span = nil
       diags[#diags + 1] = d
     end
   end

@@ -2,17 +2,27 @@
 -- «Правильно» оттуда же.
 
 local t = require("helpers")
-local describe, it, eq = t.describe, t.it, t.eq
+local describe, it, eq, truthy = t.describe, t.it, t.eq, t.truthy
 
 local lint = require("sqlkit.lint")
 
+-- Гигиена (A2 / A6 / B1) срабатывает почти на любом обрывке процедуры — в примерах
+-- других правил переменные объявлены и не используются. Её проверяет hygiene().
+local HYGIENE = { A2 = true, A6 = true, B1 = true }
+
 ---Находки как «строка:код» (строки с 1) — читать проще, чем таблицы.
-local function found(src)
+local function found(src, only_hygiene)
   local out = {}
   for _, d in ipairs(lint.check(vim.split(src, "\n", { plain = true }))) do
-    out[#out + 1] = (d.lnum + 1) .. ":" .. d.code
+    if (HYGIENE[d.code] or false) == (only_hygiene or false) then
+      out[#out + 1] = (d.lnum + 1) .. ":" .. d.code
+    end
   end
   return out
+end
+
+local function hygiene(src)
+  return found(src, true)
 end
 
 local function src(lines)
@@ -552,23 +562,207 @@ describe("правила скилла 1.5.9", function()
     eq({ "3:P16" }, found(src({ "CREATE PROCEDURE dbo.em_InsX", "AS BEGIN", "END -- procedure" })))
     eq(
       {},
-      found(
-        src({
-          "CREATE PROCEDURE dbo.em_InsX",
-          "AS BEGIN",
-          "  if @a = 1",
-          "  begin",
-          "    set @a = 2",
-          "  end -- a",
-          "END",
-        })
-      )
+      found(src({
+        "CREATE PROCEDURE dbo.em_InsX",
+        "AS BEGIN",
+        "  if @a = 1",
+        "  begin",
+        "    set @a = 2",
+        "  end -- a",
+        "END",
+      }))
     )
   end)
   it("P14: GRANT на IP-объект", function()
     eq({ "1:P14" }, found("GRANT EXEC ON [dbo].[cht_IPGetRooms] TO [gn_DBO]"))
     eq({}, found("GRANT EXEC ON [dbo].[cht_GetRooms] TO [gn_DBO]"))
   end)
+end)
+
+describe("гигиена переменных (task-blockers §A.2 / §A.6)", function()
+  it(
+    "A2: не используется, только присваивается, таблица только заполняется; @c — A6",
+    function()
+      eq(
+        { "2:A2", "3:A2", "4:A2", "6:A6" },
+        hygiene(src({
+          "declare",
+          "   @a int",
+          "  ,@b int = 0",
+          "  ,@t table (ID int)",
+          "  ,@c int",
+          "insert into @t (ID) select @c",
+          "select @b = 1",
+        }))
+      )
+    end
+  )
+  it("A6: читается, но не присваивается; пустая таблица", function()
+    eq(
+      { "3:A6", "4:A6" },
+      hygiene(src({
+        "declare @a int",
+        "  ,@t table (ID int)",
+        "select x from T where y = @a",
+        "select ID from @t",
+      }))
+    )
+  end)
+  it(
+    "A6: чтение раньше записи — находка на чтении, со строкой записи",
+    function()
+      local d = lint.check({ "declare @u varchar(10)", "select x from T where URI = @u", "set @u = 'x'", "select @u" })
+      eq({ 1, "A6" }, { d[1].lnum, d[1].code })
+      truthy(d[1].message:find("строка 3", 1, true), d[1].message)
+    end
+  )
+  it(
+    "A6: set @i += 1 без начального значения; isnull(@s + …) в своём присваивании — чисто",
+    function()
+      eq({ "2:A6" }, hygiene(src({ "declare @i int", "set @i += 1", "select @i" })))
+      eq({}, hygiene(src({ "declare @s varchar(max)", "select @s = isnull(@s + ',', '') + Name from T", "select @s" })))
+    end
+  )
+  it(
+    "exec: @ret = и out — запись, имя параметра вызываемой — не наше",
+    function()
+      eq(
+        {},
+        hygiene(src({
+          "declare",
+          "   @RetCode int",
+          "  ,@dcID int",
+          "  ,@Mode int = 1",
+          "exec @RetCode = dbo.p",
+          "   @dcID = @dcID out",
+          "  ,@Mode = @Mode",
+          "if @RetCode <> 0 or @dcID is null",
+          "  RETURN -1",
+        }))
+      )
+      -- @dcID слева — параметр p: сама переменная не используется
+      eq({ "1:A2" }, hygiene(src({ "declare @dcID int", "exec dbo.p @dcID = 5" })))
+    end
+  )
+  it(
+    "fetch into через строки, insert / update / delete таблицы-переменной — запись",
+    function()
+      eq(
+        {},
+        hygiene(src({
+          "declare",
+          "   @a int",
+          "  ,@b int",
+          "  ,@t table (ID int)",
+          "  ,@r table (ID int)",
+          "fetch next from c into @a",
+          "  ,@b",
+          "insert @t exec dbo.p",
+          "delete from @r where ID = @a + @b",
+          "select ID from @t join @r on 1 = 1",
+        }))
+      )
+    end
+  )
+  it(
+    "батчи — отдельно, комментарии и строки — не использование",
+    function()
+      eq(
+        { "1:A2", "4:A6" },
+        hygiene(src({
+          "declare @a int -- @a",
+          "select '@a' /* @a */",
+          "GO",
+          "select @x",
+          "declare @x int",
+          "set @x = 1",
+          "select @x",
+        }))
+      )
+    end
+  )
+  it("span — строки батча", function()
+    local d = lint.check({ "select 1", "GO", "declare @a int", "select 2" })
+    eq({ 3, 4 }, d[1].span)
+  end)
+end)
+
+describe("гигиена алиасов (task-blockers §B.1)", function()
+  it("outer join только в своём ON, inner join без ссылок вовсе", function()
+    eq(
+      { "3:B1", "4:B1" },
+      hygiene(src({
+        "select c.Name",
+        "from bkContract c",
+        "  left join bkProject p on p.prjID = c.prjID",
+        "  join bkFirm f on 1 = 1",
+      }))
+    )
+  end)
+  it("end от case в начале строки — не конец инструкции", function()
+    eq(
+      {},
+      hygiene(src({
+        "declare @a int, @b int",
+        "select",
+        "   @a = case",
+        "          when s.v = 1 then 1",
+        "        end",
+        "  ,@b = s.ID",
+        "from A a",
+        "  left join S s on s.ID = a.ID",
+        "select @a, @b",
+      }))
+    )
+  end)
+  it(
+    "однотабличный запрос, цель update / delete, inner join-фильтр — чисто",
+    function()
+      eq(
+        {},
+        hygiene(src({
+          "select Name from bkContract c where ctrID = 1",
+          "update c",
+          "set Name = p.Name",
+          "from bkContract c",
+          "  join bkProject p on p.prjID = c.prjID",
+          "delete t from #T t join @d d on d.ID = t.ID",
+        }))
+      )
+    end
+  )
+  it(
+    "подзапрос (y внутри, s — только в ON) и apply — своя область, from A a, B b",
+    function()
+      eq(
+        { "3:B1", "3:B1", "6:B1" },
+        hygiene(src({
+          "select a.ID",
+          "from A a",
+          "  left join (select x.ID from X x left join Y y on y.ID = x.ID) s on s.ID = a.ID",
+          "  cross apply dbo.f(a.ID) f",
+          "where f.v = 1",
+          "select a.ID from A a, B b",
+        }))
+      )
+    end
+  )
+  it(
+    "алиас в коррелированном подзапросе и в select следующей строки — использование",
+    function()
+      eq(
+        {},
+        hygiene(src({
+          "select",
+          "   a.ID",
+          "  ,b.Name",
+          "from A a",
+          "  join B b on b.ID = a.ID",
+          "where not exists (select 1 from C where C.ID = b.ID)",
+        }))
+      )
+    end
+  )
 end)
 
 describe("SqlFormat: строки, которые переписал бы форматтер", function()

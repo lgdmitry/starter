@@ -77,7 +77,19 @@ knows nothing about dadbod, `sqlcmd` or connections, and has its own specs in
   paren depth, GO batches, the procedure and its END, begin/try/case stack),
   since T-SQL without semicolons only parses roughly from tokens. The current
   rule list is in `lint.lua` itself. Rules that need the schema (FK,
-  DEFAULT, column types) are out of scope. What `:SqlFormat` fixes by itself
+  DEFAULT, column types) are out of scope.
+  Hygiene rules port `hygiene.awk` from skill `mssql-repo-skills:task-blockers`
+  (anchors are its sections): `A2` — a declared variable that is never used or
+  only written, `A6` — read but never assigned, or read before the first write
+  (the finding sits on the read), `B1` — an alias nobody references (an outer
+  join referenced only in its own ON, too; an inner join used as a filter is
+  fine, and single-source queries are skipped). They work on tokens: exec
+  out-arguments, `@ret =`, the callee's parameter names, `fetch … into` over
+  several lines, `insert`/`update`/`delete` of a table variable, comments and
+  strings are all told apart, which the awk regexps get wrong. A finding on
+  `declare` can be caused by an edit elsewhere (the last read removed), so
+  these carry the batch's line `span` and are shown when *any* line of the
+  batch (procedure) changed, not only on changed lines. What `:SqlFormat` fixes by itself
   (case, spacing, alignment) has no rules of its own: the changed lines are run
   through the formatter dry (`sqlkit.format.format_lines`), and a line it would
   rewrite gets a WARN `SqlFormat: … → <how it should look>` — so the two can't
