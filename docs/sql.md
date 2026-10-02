@@ -48,8 +48,9 @@ knows nothing about dadbod, `sqlcmd` or connections, and has its own specs in
 - `plugins-local/mssql/lua/mssql/query.lua` — `:SqlQuery` (`<leader>dq`): a scratch query
   buffer bound to the connection and database of the current file;
   `:SqlQueryFile [name]` (`<leader>dt`; not `<leader>dp` — that is LazyVim's
-  profiler group): a persistent one, opened in the current window — a file
-  `stdpath("data")/sqlquery/conn@db.sql` whose first line
+  profiler group): a new persistent one every time, opened in the current
+  window — a file `stdpath("data")/sqlquery/conn@db.sql` (`conn@db~N.sql` when
+  taken; older ones are reopened by name, `:SqlQueryFile <Tab>`) whose first line
   `-- sqlquery: conn/db` holds the binding (re-read on
   `BufReadPost`/`BufWritePost`, so it survives restarts and sessions);
   `:SqlConn` (`<leader>ds`, query buffers only) picks another connection and

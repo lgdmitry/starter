@@ -17,16 +17,16 @@
 --               записано в нём первой строкой (`-- sqlquery: conn/db`) — b:sqlctx
 --               в файле не сохранишь, а строку видно, её можно поправить руками (после
 --               :w она перечитывается), и файл при копировании уносит её с собой.
---               Имя файла — `conn@db.sql`, по нему <leader>dt и находит запрос к паре,
---               а :SqlConn переименовывает файл вслед за подключением.
+--               Имя файла — `conn@db.sql` (`~N` при совпадении), :SqlConn
+--               переименовывает файл вслед за подключением.
 -- Оба привязаны к подключению через b:sqlctx, как и окна ответа, поэтому новый буфер
 -- запроса, открытый из буфера запроса, берёт подключение текущего, а не правила.
 --
 -- Клавиши глобальные (группа <leader>d, см. plugins/which-key.lua):
 --   <leader>dq   — открыть временный буфер запроса для подключения/базы текущего файла
 --   <leader>dQ   — то же, но подключение и база спрашиваются
---   <leader>dt   — открыть постоянный запрос для подключения/базы текущего файла;
---                  в самом постоянном запросе — завести ещё один к той же паре (~2, ~3…)
+--   <leader>dt   — завести новый постоянный запрос для подключения/базы текущего файла
+--                  (в самом постоянном запросе — к его паре); занятое имя — ~2, ~3…
 --   <leader>dT   — то же, но подключение и база спрашиваются
 --   (не <leader>dp: у LazyVim это группа profiler — <leader>dpp, <leader>dph, <leader>dps)
 --   <leader>dx   — выполнить выделенное (в визуальном режиме)
@@ -202,7 +202,7 @@ local function map_keys(buf)
     { buffer = buf, desc = "Сменить подключение запроса" }
   )
   -- окно закрывается, буфер остаётся жить: временный — bufhidden=hide, постоянный
-  -- сохраняется; текст вернётся тем же <leader>dq / <leader>dt
+  -- сохраняется; текст вернётся тем же <leader>dq или :SqlQueryFile <имя>
   vim.keymap.set("n", "q", function()
     local file = vim.b[buf].sqlquery == "file"
     if file then
@@ -387,9 +387,9 @@ local function open_path(path)
   notify(("%s → %s/%s"):format(vim.fn.fnamemodify(path, ":t:r"), ctx.conn or "?", ctx.db or "?"))
 end
 
----:SqlQueryFile [имя] — открыть постоянный запрос к подключению текущего буфера (с ! —
----выбранному руками): `conn@db.sql`, а нет его — завести. С именем — файл с этим именем,
----у существующего подключение своё, из его первой строки.
+---:SqlQueryFile [имя] — завести новый постоянный запрос к подключению текущего буфера
+---(с ! — выбранному руками): `conn@db.sql`, а занято — `conn@db~N.sql`. С именем —
+---файл с этим именем, у существующего подключение своё, из его первой строки.
 function M.open_file(opts)
   local name = vim.trim(opts.args or ""):gsub("%.sql$", "")
   if name:find('[/:*?"<>|]') then
@@ -398,13 +398,10 @@ function M.open_file(opts)
   if name ~= "" and vim.uv.fs_stat(M.dir .. "/" .. name .. ".sql") then
     return open_path(M.dir .. "/" .. name .. ".sql")
   end
-  -- из постоянного запроса — новый файл к той же паре: открыть заново себя же смысла
-  -- нет, а «ещё один запрос сюда» — ровно то, зачем жмут <leader>dt, уже стоя в нём
-  local fresh = name == "" and vim.b.sqlquery == "file"
+  -- без имени — всегда новый файл, а не прежний запрос к паре: <leader>dt жмут, чтобы
+  -- начать запрос с чистого листа, а старые открываются по имени (:SqlQueryFile <Tab>)
   pick(opts.bang, function(conn, database, file)
-    local path = name ~= "" and (M.dir .. "/" .. name .. ".sql")
-      or fresh and auto_path(conn.name, database)
-      or (M.dir .. ("/%s@%s.sql"):format(conn.name, database))
+    local path = name ~= "" and (M.dir .. "/" .. name .. ".sql") or auto_path(conn.name, database)
     if not vim.uv.fs_stat(path) then
       vim.fn.mkdir(M.dir, "p")
       vim.fn.writefile({ M.header({ conn = conn.name, db = database }), "" }, path)
@@ -495,12 +492,12 @@ function M.setup()
     "<cmd>SqlQuery!<cr>",
     "Буфер запроса, выбрав подключение и базу"
   )
-  map("n", "<leader>dt", "<cmd>SqlQueryFile<cr>", "Постоянный запрос к базе файла")
+  map("n", "<leader>dt", "<cmd>SqlQueryFile<cr>", "Новый постоянный запрос к базе файла")
   map(
     "n",
     "<leader>dT",
     "<cmd>SqlQueryFile!<cr>",
-    "Постоянный запрос, выбрав подключение и базу"
+    "Новый постоянный запрос, выбрав подключение и базу"
   )
   map("x", "<leader>dx", ":<C-u>'<,'>SqlRun<cr>", "Выполнить выделенный запрос")
 
