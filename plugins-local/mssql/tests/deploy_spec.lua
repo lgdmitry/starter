@@ -86,4 +86,30 @@ describe("deploy_files", function()
     eq({ "select 2" }, seen)
     eq(false, vim.bo[buf].modified)
   end)
+  it("постоянный запрос — в своё подключение", function()
+    local path = vim.fs.normalize(vim.fn.tempname()) .. "/crocus_dev@ServiceControle.sql"
+    vim.fn.mkdir(vim.fs.dirname(path), "p")
+    vim.fn.writefile({ "-- sqlquery: crocus_dev/ServiceControle", "select 1" }, path)
+    vim.cmd("silent edit! " .. vim.fn.fnameescape(path))
+    vim.b.sqlctx = { conn = "crocus_dev", db = "ServiceControle", file = "" }
+    local sql = t.fresh()
+    t.stub_sql(sql, fx.SERVERS, fx.CONNS)
+    sql.ensure = function()
+      return true
+    end
+    sql.select = function()
+      error("подключение спросили")
+    end
+    local seen
+    sql.sqlcmd = function(conn, db, args, on_done)
+      seen = conn.name .. "/" .. db .. " " .. vim.fs.basename(args[#args])
+      on_done(0, "", false)
+      return {}
+    end
+    require("mssql.deploy").deploy({ fargs = {} })
+    vim.wait(200, function()
+      return seen ~= nil
+    end)
+    eq("crocus_dev/ServiceControle crocus_dev@ServiceControle.sql", seen)
+  end)
 end)

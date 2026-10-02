@@ -36,7 +36,10 @@ knows nothing about dadbod, `sqlcmd` or connections, and has its own specs in
   deploys several at once. A file going into `icsMaster` is deployed to every
   server of the repo that has that database (dgsql: datagroup *and* billing/
   crocus) — `mssql.target.other_servers`; only when the connection came from the
-  rules, not with `!` or an explicit connection name.
+  rules, not with `!` or an explicit connection name. In a persistent query
+  (`<leader>dt`) the connection and database come from its `b:sqlctx` (the
+  `-- sqlquery:` line), not from the rules: the file lives outside any repo,
+  and the rules would just ask.
 - `plugins-local/mssql/lua/mssql/object.lua` — `:SqlDef` (`K`), `:SqlRows` (`<leader>dr`),
   `:SqlEnum` (`<leader>de`), `:SqlUsages` (`<leader>du`), `:SqlFile` (`gf`):
   inspect an object in the database, find where a name is used, open the

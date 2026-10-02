@@ -12,6 +12,7 @@
 -- выложилась бы предыдущая версия — молча и незаметно.
 --
 -- Подключение можно назвать явно: :SqlDeploy! или :SqlDeploy <подключение> [база].
+-- В постоянном запросе (mssql.query) подключение и база — его собственные (b:sqlctx).
 --
 -- В sql-буферах: <leader>dd — выложить, <leader>dD — выложить, выбрав подключение,
 -- <leader>dc — прервать выкладку (:SqlCancel, см. mssql.conn).
@@ -232,7 +233,14 @@ function M.deploy(opts)
     return
   end
 
+  -- Постоянный запрос (mssql.query) лежит вне репозитория — правилам там зацепиться
+  -- не за что, и без его b:sqlctx <leader>dd спрашивал подключение, хотя оно записано
+  -- первой строкой файла. Контекст без conn (строки подключения нет) — как его нет.
+  local ctx = vim.b.sqlctx
+  ctx = ctx and ctx.conn and ctx or nil
+  local run = runner(not (opts.bang or opts.fargs[1] or ctx))
   target.pick({
+    ctx = ctx,
     file = file,
     bang = opts.bang,
     name = opts.fargs[1],
@@ -240,7 +248,10 @@ function M.deploy(opts)
     prompt = "Выложить " .. vim.fn.fnamemodify(file, ":t") .. " в:",
     hint = ". Можно указать явно: :SqlDeploy <подключение> <база>",
     title = "SqlDeploy",
-  }, runner(not (opts.bang or opts.fargs[1])))
+  }, function(conn, databases, _, how)
+    -- pick отдаёт ctx.file, а у постоянного запроса он "": выкладываем сам файл
+    run(conn, databases, file, how)
+  end)
 end
 
 ---Выложить сразу несколько файлов: :SqlDeployFiles или <leader>dd по выделенным (Tab)
