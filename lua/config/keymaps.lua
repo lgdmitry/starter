@@ -33,4 +33,17 @@ vim.keymap.set("n", "<leader>fS", function()
   vim.api.nvim_feedkeys(":saveas " .. prefix, "n", false)
 end, { desc = "Save As" })
 
+-- vim.ui.open ошибку не показывает, а возвращает вторым значением — без проверки
+-- неудачный запуск (нет ассоциации, буфер без файла) проходил бы молча.
+vim.keymap.set("n", "<leader>fO", function()
+  local file = vim.fn.expand("%:p")
+  if file == "" then
+    return vim.notify("Buffer has no file", vim.log.levels.WARN)
+  end
+  local _, err = vim.ui.open(file)
+  if err then
+    vim.notify(err, vim.log.levels.ERROR)
+  end
+end, { desc = "Open with System Application" })
+
 vim.keymap.set("i", "hh", "<Esc>l", { desc = "Exit insert mode" })
