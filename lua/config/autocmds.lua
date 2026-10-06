@@ -33,7 +33,7 @@ vim.api.nvim_create_autocmd("VimEnter", {
 })
 
 -- Репозитории-зеркала T-SQL (c:/repo/dgsql, c:/repo/esql): .sql файлы там в utf-8 с BOM
--- и CRLF (до перекодировки 2026-08 были cp1251; в старых коммитах она и осталась).
+-- и CRLF.
 -- Раньше это задавал .editorconfig внутри dgsql, но Neovim ругался на charset, которого нет
 -- в спецификации editorconfig. Из тех настроек здесь остались только те, которых нет в
 -- дефолтах: CRLF для новых файлов даёт виндовый fileformats=dos,unix, финальный перевод
