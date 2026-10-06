@@ -60,7 +60,6 @@ describe("временный буфер", function()
     eq("sqlserver://dgsql/ics_ua97", vim.b.db)
     eq("sqlquery://dgsql_dev/ics_ua97", vim.api.nvim_buf_get_name(buf))
     vim.cmd("stopinsert")
-    vim.cmd("wincmd p")
     q.open({ bang = false })
     eq(buf, vim.api.nvim_get_current_buf())
   end)
@@ -292,4 +291,78 @@ describe("постоянный запрос", function()
       eq("<Cmd>SqlDeploy<CR>", vim.fn.maparg("<F5>", mode), "файл, " .. mode)
     end
   end)
+end)
+
+describe(":SqlExport", function()
+  it(
+    "по умолчанию — .json рядом с файлом, у буфера без файла — в каталог",
+    function()
+      local q = setup()
+      eq("C:/r/.claude/scratchpad/1/01_data.json", q.export_path("C:/r/.claude/scratchpad/1/01_data.sql"))
+      eq(vim.fs.normalize(vim.uv.cwd()) .. "/export.json", q.export_path("sqlquery://dgsql_dev/datagroup"))
+      eq(vim.fs.normalize(vim.uv.cwd()) .. "/export.json", q.export_path(""))
+    end
+  )
+  it(
+    "флаги: .json — без заголовков и обрезки, остальное — таблица",
+    function()
+      local q = setup()
+      eq({ { width = 65535, trunc = 0 }, true }, { q.export_opts("a/01_data.JSON") })
+      eq({ { width = 65535, trunc = 8000 }, false }, { q.export_opts("a/out.txt") })
+    end
+  )
+  it("хвостовые пустые строки срезаются, не-JSON помечается", function()
+    local q = setup()
+    eq({ { '[{"a":1}]', '{"b":2}' }, true, {} }, { q.export_text('[{"a":1}]\n{"b":2}\n\n', true) })
+    eq(false, select(2, q.export_text("Msg 208, Level 16\n", true)))
+    eq(false, select(2, q.export_text("", true)), "пустой ответ")
+    eq({ { "n s", "- -" }, true, {} }, { q.export_text("n s\n- -\n", false) })
+    -- for json приходит кусками по 2033 символа — склеиваются обратно в один набор
+    eq({ { '[{"a":"xy"}]', "[1]" }, true, {} }, { q.export_text('[{"a":"x\ny"}]\n[1]\n', true) })
+    eq({ { '[{"a":', "[1]" }, false, {} }, { q.export_text('[{"a":\n[1]\n', true) }, "оборванный")
+    -- предупреждения сервера sqlcmd пишет в тот же stdout — в файл их не пускаем
+    eq(
+      { { "[1]" }, true, { "Warning: Null value is eliminated" } },
+      { q.export_text("Warning: Null value is eliminated\n[1]\n", true) }
+    )
+    eq({ { "Msg 208, Level 16" }, false, { "Msg 208, Level 16" } }, { q.export_text("Msg 208, Level 16\n", true) })
+  end)
+  it(
+    "пишет ответ в файл с NOCOUNT впереди; при ошибке файл не трогает",
+    function()
+      local q = setup()
+      q.open_file({ args = "", bang = false })
+      vim.cmd("stopinsert")
+      -- BOM, оставшийся в тексте первой строки, после SET NOCOUNT ломал запрос
+      vim.api.nvim_buf_set_lines(
+        0,
+        0,
+        1,
+        false,
+        { "\239\187\191\239\187\191" .. vim.api.nvim_buf_get_lines(0, 0, 1, false)[1] }
+      )
+      vim.api.nvim_buf_set_lines(0, 1, -1, false, { "select 1" })
+      local sql = require("mssql.conn")
+      local got
+      sql.ensure = function()
+        return true
+      end
+      sql.run = function(o, cb)
+        got = o
+        cb(0, '[{"a":1}]\n')
+      end
+      local out = vim.fs.normalize(vim.fn.tempname()) .. "/d.json"
+      q.export({ range = 0, args = out, bang = false })
+      eq("SET NOCOUNT ON;", got.lines[1])
+      eq(nil, got.lines[2]:find("\239\187\191", 1, true), "BOM")
+      eq({ conn = "dgsql_dev", db = "ics_ua97" }, { conn = got.conn.name, db = got.db })
+      eq({ '[{"a":1}]' }, read(out))
+      sql.run = function(_, cb)
+        cb(1, "Msg 102, Level 15")
+      end
+      vim.cmd("wincmd p")
+      q.export({ range = 0, args = out, bang = false })
+      eq({ '[{"a":1}]' }, read(out), "после ошибки")
+    end
+  )
 end)

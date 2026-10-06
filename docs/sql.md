@@ -155,3 +155,14 @@ just in the query. `sqlcmd`'s own output codepage is not worth relying on
 either (`-f i:65001` vs `-f 65001` vs a BOM all behave differently, and it
 seems to mirror whatever encoding it detected in the input file); detect the
 bytes instead, which is what `mssql.conn.output_to_utf8` does.
+
+`:SqlExport` (`<leader>do`) writes the result to `<name>.json` next to the
+file. Three things it has to undo: a file's BOM stays in the first buffer line
+as text (`fileencodings` has no `ucs-bom`, proc-test files may even carry two),
+and once `SET NOCOUNT ON;` is prepended the server sees it as `Incorrect syntax
+near '?'` — so leading BOMs are stripped; `FOR JSON` comes back in 2033-char
+rows that `sqlcmd` prints one per line — consecutive lines are joined until
+they parse; server messages (`Warning: Null value is eliminated…`, `print`)
+share stdout — they go to a notification, not the file. Note that the dgsql
+dev server reports itself as `EXPRESS-DEV\SNICKERS` (`@@servername`) — that
+is not the esql box (`tank22`).
