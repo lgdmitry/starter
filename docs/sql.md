@@ -126,7 +126,10 @@ Target server and databases are resolved by `mssql.target` from the repo's
 `.claude/repo-conventions.json` (the same rules the `deploy-commit` skill
 uses): server by the top folder's environment, address from
 `.mcp.environments.json`; databases from the file's own `usBases ... OptionsDB`
-guard if present, otherwise by path rules; files under `Alter/**` take them only
+guard if present (the mask is resolved against the `icsMaster.dbo.usBases`
+of the *target* server — each server has its own registry, and `Crocus` is
+only in crocus's; default's registry is used only when the target has no
+`icsMaster`), otherwise by path rules; files under `Alter/**` take them only
 from their first line (`-- ua` / `master` / `buh` / `crocus` / `dev` / `DUP_Old_Data`,
 comma-separated),
 an unknown name refuses rather than falling back. Without `repo-conventions.json`

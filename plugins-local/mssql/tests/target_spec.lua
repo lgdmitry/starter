@@ -65,7 +65,7 @@ describe("resolve_databases", function()
     eq("usBases 0x3000000", how)
   end)
   it(
-    "реестр usBases читается с default-сервера, даже когда файл едет на crocus",
+    "реестр usBases читается с сервера, куда едет файл",
     function()
       local target, _, log = setup()
       local dbs = target.resolve_databases(ROOT .. "/Crocus/copied_PRC.sql", conn("crocus_dev"), CONNS)
@@ -75,7 +75,18 @@ describe("resolve_databases", function()
         return q:find("usBases", 1, true) ~= nil
       end, log.queries)
       eq(1, #registry)
-      t.truthy(registry[1]:find("^dgsql/icsMaster"), "реестр с dgsql: " .. registry[1])
+      t.truthy(registry[1]:find("^crocus/icsMaster"), "реестр с crocus: " .. registry[1])
+    end
+  )
+  it(
+    "сторож с битом Crocus на crocus — Crocus, хотя путь ведёт в datagroup",
+    function()
+      local target = setup()
+      local file = ROOT .. "/ics_ua97/bk/both_PRC.sql"
+      local dbs, how = target.resolve_databases(file, conn("crocus_dev"), CONNS)
+      eq({ "Crocus" }, dbs)
+      eq("usBases 0xb000000", how)
+      eq({ "datagroup", "ics_ua97" }, (target.resolve_databases(file, conn("dgsql_dev"), CONNS)))
     end
   )
   it("условный блок без DROP сторожем не считается", function()

@@ -10,7 +10,11 @@ M.SERVERS = {
     dbs = { "datagroup", "ics_ua97", "icsMaster", "DEV_NEW", "icsFiles", "DUP_Old_Data" },
     usbases = { datagroup = 0x1000000, ics_ua97 = 0x2000000, DEV_NEW = 0x4000000 },
   },
-  crocus = { dbs = { "Crocus", "ServiceControle", "icsMaster" } },
+  -- реестр у crocus свой, и Crocus записан только в нём
+  crocus = {
+    dbs = { "Crocus", "ServiceControle", "icsMaster" },
+    usbases = { Crocus = 0x8000000, icsMaster = 0x20000000 },
+  },
   dgsqltest = { dbs = { "datagroup" } },
 }
 M.CONNS = {
@@ -50,6 +54,8 @@ M.ROOT = t.repo({
     ["ics_ua97/bk/b_PRC.sql"] = "select 1",
     ["ics_ua97/g_PRC.sql"] = M.GUARD:format("0x3000000"),
     ["ics_ua97/c_TAB.sql"] = M.CONDITIONAL,
+    -- живёт и в datagroup/ics_ua97, и в Crocus (0x8000000)
+    ["ics_ua97/bk/both_PRC.sql"] = M.GUARD:format("0xB000000"),
     ["Crocus/d_PRC.sql"] = "select 1",
     ["Crocus/copied_PRC.sql"] = M.GUARD:format("0x3000000"),
     ["ServiceControle/e_PRC.sql"] = "select 1",

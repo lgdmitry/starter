@@ -11,8 +11,8 @@
 --            маска часто даёт несколько баз: 0x3000000 -> datagroup + ics_ua97),
 --            иначе по пути внутри репозитория — см. PATH_RULES ниже; в Alter/** —
 --            только по первой строке файла («-- buh»), см. ALTER_BASES.
--- Реестр usBases всегда читается с сервера окружения default: он там один на всех,
--- даже когда сам файл уезжает на другой сервер.
+-- Реестр usBases читается с того сервера, куда едет файл: у каждого сервера он свой
+-- (на crocus — Crocus/icsMaster/icsFiles), и сторож при выкладке смотрит именно в него.
 --
 -- Без repo-conventions.json (обычный репозиторий) работают запасные правила:
 -- dev-подключение по имени/хосту и база из первой папки пути либо из URL.
@@ -163,8 +163,7 @@ end
 
 local mask_cache = {}
 
----Базы по маске. Реестр usBases живёт в icsMaster на сервере окружения default —
----оттуда его и читаем, даже если файл уедет на другой сервер.
+---Базы по маске из реестра usBases (icsMaster) сервера registry.
 local function mask_databases(mask, registry)
   local key = registry.url .. " " .. mask
   if not mask_cache[key] then
@@ -415,12 +414,20 @@ function M.resolve_databases(file, conn, list)
   end
   local mask = guard_mask(file)
   if mask then
-    local _, root = repo_path(file)
-    local conv = conventions(root)
-    local registry = conv and connection_for_server(list, env_server(root, conv, conv.defaultServerEnvironment)) or conn
-    -- маска резолвится по общему реестру, а работаем с конкретным сервером: оставляем
-    -- только те базы, которые на нём есть. Так отсекается чужой сторож, скопированный в
-    -- Crocus/** из ics_ua97 (0x3000000 -> datagroup + ics_ua97, которых на Crocus нет).
+    -- Реестр — с того сервера, куда едет файл: сторож при выкладке смотрит в icsMaster
+    -- своего сервера, а реестры у серверов разные (Crocus 0x8000000 записан только на
+    -- crocus). С реестром default файл из ics_ua97/bk с маской 0xB000000 на crocus
+    -- не находил Crocus и упирался в правило по пути. Реестр default — только если на
+    -- сервере файла icsMaster нет.
+    local registry = conn
+    if not server_databases(conn).icsmaster then
+      local _, root = repo_path(file)
+      local conv = conventions(root)
+      registry = conv and connection_for_server(list, env_server(root, conv, conv.defaultServerEnvironment)) or conn
+    end
+    -- на сервере могут быть не все базы реестра: оставляем только те, что на нём есть.
+    -- Так отсекается чужой сторож, скопированный в Crocus/** из ics_ua97
+    -- (0x3000000 -> datagroup + ics_ua97, которых на Crocus нет).
     local dbs = {}
     for _, db in ipairs(mask_databases(mask, registry)) do
       local exact = server_databases(conn)[db:lower()]
