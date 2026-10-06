@@ -160,7 +160,11 @@ seems to mirror whatever encoding it detected in the input file); detect the
 bytes instead, which is what `mssql.conn.output_to_utf8` does.
 
 `:SqlExport` (`<leader>do`) writes the result to `<name>.json` next to the
-file. Three things it has to undo: a file's BOM stays in the first buffer line
+file, or to `<name>.txt` (a plain table) when the query has no `FOR JSON`
+outside comments and string literals. The decision is made from the query
+text, not the output: the `sqlcmd` flags (no headers, no truncation for JSON)
+must be chosen before it runs. An explicit path picks the mode by its
+extension instead. Three things it has to undo: a file's BOM stays in the first buffer line
 as text (`fileencodings` has no `ucs-bom`, proc-test files may even carry two),
 and once `SET NOCOUNT ON;` is prepended the server sees it as `Incorrect syntax
 near '?'` — so leading BOMs are stripped; `FOR JSON` comes back in 2033-char

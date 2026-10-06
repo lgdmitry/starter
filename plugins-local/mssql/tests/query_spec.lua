@@ -295,14 +295,24 @@ end)
 
 describe(":SqlExport", function()
   it(
-    "по умолчанию — .json рядом с файлом, у буфера без файла — в каталог",
+    "по умолчанию — рядом с файлом (.json или .txt), у буфера без файла — в каталог",
     function()
       local q = setup()
-      eq("C:/r/.claude/scratchpad/1/01_data.json", q.export_path("C:/r/.claude/scratchpad/1/01_data.sql"))
-      eq(vim.fs.normalize(vim.uv.cwd()) .. "/export.json", q.export_path("sqlquery://dgsql_dev/datagroup"))
-      eq(vim.fs.normalize(vim.uv.cwd()) .. "/export.json", q.export_path(""))
+      eq("C:/r/.claude/scratchpad/1/01_data.json", q.export_path("C:/r/.claude/scratchpad/1/01_data.sql", true))
+      eq("C:/r/.claude/scratchpad/1/01_data.txt", q.export_path("C:/r/.claude/scratchpad/1/01_data.sql", false))
+      eq(vim.fs.normalize(vim.uv.cwd()) .. "/export.json", q.export_path("sqlquery://dgsql_dev/datagroup", true))
+      eq(vim.fs.normalize(vim.uv.cwd()) .. "/export.txt", q.export_path("", false))
     end
   )
+  it("JSON ли ответ — по for json вне комментариев и строк", function()
+    local q = setup()
+    eq(true, q.returns_json({ "select 1 as a", "FOR  JSON PATH" }))
+    eq(true, q.returns_json({ "select * from t for", "json auto" }))
+    eq(false, q.returns_json({ "select 1" }))
+    eq(false, q.returns_json({ "select 1 -- for json path" }))
+    eq(false, q.returns_json({ "/* for", "json */ select 1" }))
+    eq(false, q.returns_json({ "select 'for json' as s" }))
+  end)
   it(
     "флаги: .json — без заголовков и обрезки, остальное — таблица",
     function()
