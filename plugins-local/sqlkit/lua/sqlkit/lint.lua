@@ -1383,7 +1383,14 @@ local function scope(buf, on_known)
   end
 end
 
+---Строка без разницы в количестве пробелов: отступ и выравнивание схлопнуты.
+local function squeeze(s)
+  return vim.trim(s):gsub("%s+", " ")
+end
+
 ---Строки из set (true — все), которые форматтер переписал бы: находки SqlFormat.
+---Расхождение только в количестве пробелов (отступ, выравнивание колонок) не находка:
+---на нём линтер шумел больше, чем помогал, а выравнивание чинит <leader>df при форматировании.
 ---@param lines string[]
 ---@param set true|table<integer, boolean>
 ---@param opts? { tabstop?: integer }
@@ -1392,7 +1399,7 @@ function M.unformatted(lines, set, opts)
   local out = set == true and fmt.format(lines, 1, #lines, opts) or fmt.format_lines(lines, set, opts)
   local diags = {}
   for l, line in ipairs(lines) do
-    if out[l] ~= line and (set == true or set[l]) then
+    if out[l] ~= line and (set == true or set[l]) and squeeze(out[l]) ~= squeeze(line) then
       local want = vim.trim(out[l])
       if vim.fn.strchars(want) > 70 then
         want = vim.fn.strcharpart(want, 0, 70) .. "…"

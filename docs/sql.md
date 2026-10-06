@@ -101,7 +101,9 @@ knows nothing about dadbod, `sqlcmd` or connections, and has its own specs in
   (case, spacing, alignment) has no rules of its own: the changed lines are run
   through the formatter dry (`sqlkit.format.format_lines`), and a line it would
   rewrite gets a WARN `SqlFormat: … → <how it should look>` — so the two can't
-  diverge. The tokenizer and word lists are shared with the formatter in
+  diverge. A rewrite that only changes the *amount* of whitespace (indent,
+  column alignment, doubled spaces) is not reported — it was more noise than
+  help; a missing space (`@a=1`) still is. The tokenizer and word lists are shared with the formatter in
   `plugins-local/sqlkit/lua/sqlkit/token.lua`.
 - `plugins-local/sqlkit/lua/sqlkit/indent.lua` — `indentexpr` for sql buffers, set from
   `plugins-local/sqlkit/indent/sql.lua` (plugin dir is ahead of `$VIMRUNTIME` in rtp, and

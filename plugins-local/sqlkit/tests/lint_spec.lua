@@ -782,4 +782,7 @@ describe("SqlFormat: строки, которые переписал бы фор
     eq({}, lint.unformatted(lines("RAISERROR(77311, 16, 10) WITH SETERROR"), { [1] = true }))
     eq(1, #lint.unformatted(lines("set @a = 1\nset @b=2"), true))
   end)
+  it("разница только в количестве пробелов — не находка", function()
+    eq({}, lint.unformatted(lines("    set  @a  =   1"), true))
+  end)
 end)
