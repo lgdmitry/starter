@@ -19,10 +19,14 @@ vim.keymap.set("n", "<leader>yf", function()
 end, { desc = "Yank filename" })
 
 -- Snacks.bufdelete.all() окна не трогает: сплиты остаются, просто с пустым буфером
--- в каждом. Схлопываем их до одного, чтобы вышел чистый лист.
+-- в каждом. Схлопываем их до одного, чтобы вышел чистый лист. Вкладки тоже: :only
+-- их не трогает, и пустой буфер в окнах других вкладок переживает открытие файла —
+-- пикер удаляет пустой буфер, только если тот больше нигде не показан.
+-- wipe, а не delete: после :bdelete буфер файла остаётся (unlisted), и :edit того же
+-- файла берёт его, а не переиспользует пустой — пустой висит фантомным [No Name].
 vim.keymap.set("n", "<leader>ba", function()
-  Snacks.bufdelete.all()
-  vim.cmd("silent! only")
+  Snacks.bufdelete.all({ wipe = true })
+  vim.cmd("silent! tabonly | silent! only")
 end, { desc = "Delete All Buffers and Windows" })
 
 -- Командная строка не выполняется, а только заполняется: имя дописываешь сам.
