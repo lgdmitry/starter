@@ -25,7 +25,10 @@ local by_mtime = {
 -- Маппинг буферный и такой же, как глобальный: без него <leader>dd в окне пикера
 -- сработал бы глобальный и попробовал выложить сам буфер пикера, то есть ничего.
 -- <leader>dD — то же, но подключение спрашивается (один раз на всю пачку).
-local function deploy_action(pick)
+-- <leader>do / <leader>dO — так же выполнить и выгрузить ответы рядом, как :SqlExport в
+-- самом файле (mssql.query.export_files).
+-- Модуль — по имени, require в момент нажатия: mssql грузится позже разбора этого спека.
+local function sql_action(mod, fn, pick)
   return function(picker)
     -- fallback: без выделения выкладывается запись под курсором
     local files = vim.tbl_map(Snacks.picker.util.path, picker:selected({ fallback = true }))
@@ -35,19 +38,26 @@ local function deploy_action(pick)
     if picker.opts.source ~= "explorer" then
       picker:close()
     end
-    require("mssql.deploy").deploy_files(files, { pick = pick })
+    require(mod)[fn](files, { pick = pick })
   end
 end
 
 local deploy_keys = {
   ["<leader>dd"] = { "sql_deploy", desc = "выложить .sql (SqlDeploy)" },
   ["<leader>dD"] = { "sql_deploy_pick", desc = "выложить .sql, выбрав подключение" },
+  ["<leader>do"] = { "sql_export", desc = "выгрузить ответ .sql рядом (SqlExport)" },
+  ["<leader>dO"] = {
+    "sql_export_pick",
+    desc = "выгрузить ответ .sql, выбрав подключение",
+  },
 }
 
 local deploy = {
   actions = {
-    sql_deploy = deploy_action(false),
-    sql_deploy_pick = deploy_action(true),
+    sql_deploy = sql_action("mssql.deploy", "deploy_files", false),
+    sql_deploy_pick = sql_action("mssql.deploy", "deploy_files", true),
+    sql_export = sql_action("mssql.query", "export_files", false),
+    sql_export_pick = sql_action("mssql.query", "export_files", true),
   },
   win = {
     list = { keys = deploy_keys },

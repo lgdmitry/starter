@@ -587,8 +587,83 @@ function M.export_text(text, json)
   return #out > 0 and out or messages, valid, messages
 end
 
+---Текст скрипта к выгрузке: BOM файла остаётся в первой строке текстом (в
+---fileencodings нет ucs-bom). В начале входа sqlcmd его съедает, а после вставленной
+---строки он — «Incorrect syntax near '?'». Снимаем все: файлы proc-test приходят и с
+---двумя BOM подряд. SET NOCOUNT — без «(N rows affected)»: в JSON они ломают файл, в
+---таблице только мешают.
+local function export_lines(lines)
+  lines = vim.list_extend({}, lines)
+  while (lines[1] or ""):sub(1, 3) == "\239\187\191" do
+    lines[1] = lines[1]:sub(4)
+  end
+  return vim.list_extend({ "SET NOCOUNT ON;" }, lines)
+end
+
+---Выполнить и записать ответ в path. Ошибка sqlcmd — файл не трогаем, ответ в окне.
+---done(true) — файл записан.
+local function export_to(lines, path, conn, database, file, done)
+  local flags, json = M.export_opts(path)
+  sql.run({
+    conn = conn,
+    db = database,
+    lines = lines,
+    opts = flags,
+    progress = ("выгрузка с %s/%s… (<leader>dc — отменить)"):format(conn.name, database),
+    title = "SqlExport",
+  }, function(code, text)
+    if code ~= 0 then
+      notify(
+        ("sqlcmd вернул %d (%s/%s), %s не записан"):format(
+          code,
+          conn.name,
+          database,
+          vim.fn.fnamemodify(path, ":t")
+        ),
+        vim.log.levels.ERROR
+      )
+      sqlwin.show({
+        kind = "query",
+        title = ("выгрузка @ %s/%s"):format(conn.name, database),
+        text = text,
+        ctx = { file = file, conn = conn.name, db = database },
+        filetype = "",
+        bottom = true,
+      })
+      return done(false)
+    end
+    local out, valid, messages = M.export_text(text, json)
+    vim.fn.mkdir(vim.fs.dirname(path), "p")
+    vim.fn.writefile(out, path)
+    notify(("%s/%s → %s"):format(conn.name, database, path))
+    if not valid then
+      notify(
+        vim.fn.fnamemodify(path, ":t") .. ": не JSON — в скрипте нет for json?",
+        vim.log.levels.WARN
+      )
+    elseif #messages > 0 then
+      notify("сообщения сервера (в файл не попали):\n" .. table.concat(messages, "\n"))
+    end
+    done(true)
+  end)
+end
+
+---Показать файл выгрузки рядом с исходником: уже открытый — перечитать (иначе в
+---буфере остаётся прошлый ответ), видимый — просто перейти в его окно.
+local function show_export(path)
+  local buf = vim.fn.bufnr(path)
+  if buf ~= -1 and vim.api.nvim_buf_is_loaded(buf) then
+    vim.cmd("checktime " .. buf)
+  end
+  local win = buf ~= -1 and vim.fn.bufwinid(buf) or -1
+  if win ~= -1 then
+    return vim.api.nvim_set_current_win(win)
+  end
+  vim.cmd("vsplit " .. vim.fn.fnameescape(path))
+end
+
 ---:SqlExport [путь] — выполнить буфер (или диапазон) и записать ответ в файл, а не в
----окно. Подключение — как у :SqlRun. Ошибка sqlcmd — файл не трогаем, ответ в окне.
+---окно, и открыть его рядом. Подключение — как у :SqlRun.
 function M.export(opts)
   if not sql.ensure("SqlExport") then
     return
@@ -598,54 +673,105 @@ function M.export(opts)
   if vim.trim(table.concat(lines, "\n")) == "" then
     return notify("нечего выполнять", vim.log.levels.WARN)
   end
-  -- BOM файла остаётся в первой строке текстом (в fileencodings нет ucs-bom). В начале
-  -- входа sqlcmd его съедает, а после вставленной строки он — «Incorrect syntax near '?'».
-  -- Снимаем все: файлы proc-test приходят и с двумя BOM подряд
-  while lines[1]:sub(1, 3) == "\239\187\191" do
-    lines[1] = lines[1]:sub(4)
-  end
-  -- без «(N rows affected)»: в JSON они ломают файл, в таблице только мешают
-  lines = vim.list_extend({ "SET NOCOUNT ON;" }, lines)
+  lines = export_lines(lines)
   local arg = vim.trim(opts.args or "")
   local path = vim.fs.normalize(
     arg ~= "" and vim.fn.fnamemodify(arg, ":p") or M.export_path(vim.api.nvim_buf_get_name(0), M.returns_json(lines))
   )
-  local flags, json = M.export_opts(path)
-
   pick(opts.bang, function(conn, database, file)
-    sql.run({
-      conn = conn,
-      db = database,
-      lines = lines,
-      opts = flags,
-      progress = ("выгрузка с %s/%s… (<leader>dc — отменить)"):format(conn.name, database),
-      title = "SqlExport",
-    }, function(code, text)
-      if code ~= 0 then
-        notify(
-          ("sqlcmd вернул %d (%s/%s), файл не записан"):format(code, conn.name, database),
-          vim.log.levels.ERROR
-        )
-        return sqlwin.show({
-          kind = "query",
-          title = ("выгрузка @ %s/%s"):format(conn.name, database),
-          text = text,
-          ctx = { file = file, conn = conn.name, db = database },
-          filetype = "",
-          bottom = true,
-        })
-      end
-      local out, valid, messages = M.export_text(text, json)
-      vim.fn.mkdir(vim.fs.dirname(path), "p")
-      vim.fn.writefile(out, path)
-      notify(("%s/%s → %s"):format(conn.name, database, path))
-      if not valid then
-        notify("в файле не JSON — в скрипте нет for json?", vim.log.levels.WARN)
-      elseif #messages > 0 then
-        notify("сообщения сервера (в файл не попали):\n" .. table.concat(messages, "\n"))
+    export_to(lines, path, conn, database, file, function(ok)
+      if ok then
+        show_export(path)
       end
     end)
   end)
+end
+
+---Строки файла как их видит nvim: открытый — из буфера (с несохранёнными правками),
+---иначе загружаем буфером, а не readfile — так текст приходит уже перекодированным
+---по fileencodings, а не сырыми байтами cp1251.
+local function file_lines(path)
+  local buf = vim.fn.bufadd(path)
+  vim.fn.bufload(buf)
+  return vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+end
+
+---Выгрузить пачку файлов из пикера (<leader>do): каждый — в свой .json/.txt рядом, как
+---:SqlExport в самом файле, но без открытия ответов: из пикера выгружают пачкой, и
+---десяток сплитов только мешал бы. Подключение — по правилам каждого файла, а с
+---pick — одно, спрошенное раз на всю пачку. По очереди, а не разом: прогресс и
+---<leader>dc рассчитаны на один sqlcmd.
+---@param files string[]
+---@param opts? { pick: boolean? }
+function M.export_files(files, opts)
+  opts = opts or {}
+  if not sql.ensure("SqlExport") then
+    return
+  end
+  local sqls, skipped = {}, {}
+  for _, path in ipairs(files) do
+    path = vim.fs.normalize(path)
+    if vim.fn.isdirectory(path) == 0 and path:lower():match("%.sql$") then
+      sqls[#sqls + 1] = path
+    else
+      skipped[#skipped + 1] = vim.fn.fnamemodify(path, ":t")
+    end
+  end
+  if #skipped > 0 then
+    notify("не .sql, пропущено: " .. table.concat(skipped, ", "), vim.log.levels.WARN)
+  end
+  if #sqls == 0 then
+    return
+  end
+
+  local failed = {}
+  local function step(i, chosen)
+    if i > #sqls then
+      if #sqls > 1 then
+        notify(
+          #failed == 0 and ("выгружено файлов: %d"):format(#sqls)
+            or ("не выгрузилось %d из %d: %s"):format(#failed, #sqls, table.concat(failed, ", ")),
+          #failed == 0 and vim.log.levels.INFO or vim.log.levels.ERROR
+        )
+      end
+      return
+    end
+    local src = sqls[i]
+    local lines = file_lines(src)
+    if vim.trim(table.concat(lines, "\n")) == "" then
+      failed[#failed + 1] = vim.fn.fnamemodify(src, ":t")
+      return step(i + 1, chosen)
+    end
+    lines = export_lines(lines)
+    local function run(conn, database)
+      local path = M.export_path(src, M.returns_json(lines))
+      export_to(lines, path, conn, database, src, function(ok)
+        if not ok then
+          failed[#failed + 1] = vim.fn.fnamemodify(src, ":t")
+        end
+        step(i + 1, chosen)
+      end)
+    end
+    if chosen then
+      return run(chosen.conn, chosen.db)
+    end
+    target.pick({
+      file = src,
+      bang = opts.pick,
+      prompt = "Выгрузка с:",
+      title = "SqlExport",
+      url_fallback = true,
+    }, function(conn, dbs)
+      if not opts.pick then
+        return run(conn, dbs[1])
+      end
+      choose_db(conn, dbs, function(db)
+        chosen = { conn = conn, db = db }
+        run(conn, db)
+      end)
+    end)
+  end
+  step(1)
 end
 
 function M.setup()

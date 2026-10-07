@@ -394,4 +394,52 @@ describe(":SqlExport", function()
       eq({ '[{"a":1}]' }, read(out), "после ошибки")
     end
   )
+  it(
+    "открывает файл ответа рядом, повторная выгрузка — перечитывает его",
+    function()
+      local q = setup()
+      local sql = require("mssql.conn")
+      sql.ensure = function()
+        return true
+      end
+      local answer_text = '[{"a":1}]\n'
+      sql.run = function(_, cb)
+        cb(0, answer_text)
+      end
+      local out = vim.fs.normalize(vim.fn.tempname()) .. "/d.json"
+      q.export({ range = 0, args = out, bang = false })
+      eq(out, vim.fs.normalize(vim.api.nvim_buf_get_name(0)))
+      eq(2, #vim.api.nvim_tabpage_list_wins(0))
+      vim.cmd("wincmd p")
+      answer_text = '[{"a":2}]\n'
+      q.export({ range = 0, args = out, bang = false })
+      eq(out, vim.fs.normalize(vim.api.nvim_buf_get_name(0)))
+      eq(2, #vim.api.nvim_tabpage_list_wins(0), "второго сплита нет")
+      eq({ '[{"a":2}]' }, vim.api.nvim_buf_get_lines(0, 0, -1, false))
+    end
+  )
+  it(
+    "пачка из пикера: каждый .sql — рядом, по правилам файла, без открытия",
+    function()
+      local q = setup()
+      local sql = require("mssql.conn")
+      sql.ensure = function()
+        return true
+      end
+      local runs = {}
+      sql.run = function(o, cb)
+        runs[#runs + 1] = o.conn.name .. "/" .. o.db
+        cb(0, "n\n1\n")
+      end
+      local crocus = F.ROOT .. "/Crocus/d_PRC.sql"
+      local wins = #vim.api.nvim_tabpage_list_wins(0)
+      q.export_files({ FILE, crocus, F.ROOT .. "/ics_ua97" })
+      eq({ "dgsql_dev/ics_ua97", "crocus_dev/Crocus" }, runs)
+      eq({ "n", "1" }, read(F.ROOT .. "/ics_ua97/a_PRC.txt"))
+      eq({ "n", "1" }, read(F.ROOT .. "/Crocus/d_PRC.txt"))
+      eq(wins, #vim.api.nvim_tabpage_list_wins(0), "ничего не открыто")
+      os.remove(F.ROOT .. "/ics_ua97/a_PRC.txt")
+      os.remove(F.ROOT .. "/Crocus/d_PRC.txt")
+    end
+  )
 end)

@@ -171,7 +171,11 @@ file, or to `<name>.txt` (a plain table) when the query has no `FOR JSON`
 outside comments and string literals. The decision is made from the query
 text, not the output: the `sqlcmd` flags (no headers, no truncation for JSON)
 must be chosen before it runs. An explicit path picks the mode by its
-extension instead. Three things it has to undo: a file's BOM stays in the first buffer line
+extension instead. The written file is opened in a vertical split (or reloaded
+where it is already shown). In a snacks picker / explorer `<leader>do`
+(`<leader>dO` — one connection for the whole batch) exports Tab-selected `.sql`
+files one by one via `mssql.query.export_files`, each next to its source and by
+its own rules, without opening anything. Three things it has to undo: a file's BOM stays in the first buffer line
 as text (`fileencodings` has no `ucs-bom`, proc-test files may even carry two),
 and once `SET NOCOUNT ON;` is prepended the server sees it as `Incorrect syntax
 near '?'` — so leading BOMs are stripped; `FOR JSON` comes back in 2033-char
