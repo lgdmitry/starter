@@ -57,6 +57,11 @@ knows nothing about dadbod, `sqlcmd` or connections, and has its own specs in
   `BufReadPost`/`BufWritePost`, so it survives restarts and sessions);
   `:SqlConn` (`<leader>ds`, query buffers only) picks another connection and
   database for the current query buffer and renames an auto-named file.
+  `q` in a query buffer goes back to the previous buffer; a scratch query stays
+  hidden for the next `<leader>dq`, a persistent one is saved and deleted.
+  Auto-named persistent files (`conn@db`, `conn@db~N`) last only for the day:
+  `setup()` removes those not modified since the start of today (open ones
+  excepted); files named by hand stay until removed.
   Both kinds carry `b:sqlctx`, so a query buffer opened from a query buffer
   inherits its connection instead of the rules.
   `:SqlRun` (`<leader>dx`, or `<F5>` in any mode, insert included — it

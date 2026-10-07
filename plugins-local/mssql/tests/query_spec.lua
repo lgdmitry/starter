@@ -188,7 +188,7 @@ describe("постоянный запрос", function()
       eq({ conn = "dgsql_dev", db = "ics_ua97", file = "" }, vim.b.sqlctx)
     end
   )
-  it("q — назад к файлу в том же окне, запрос сохранён", function()
+  it("q — назад к файлу в том же окне, запрос сохранён и закрыт", function()
     local q = setup()
     local main = vim.api.nvim_get_current_buf()
     q.open_file({ args = "", bang = false })
@@ -197,6 +197,7 @@ describe("постоянный запрос", function()
     vim.fn.maparg("q", "n", false, true).callback()
     eq(main, vim.api.nvim_get_current_buf())
     eq("select 1", read(q.dir .. "/" .. AUTO .. ".sql")[2])
+    eq(0, vim.fn.buflisted(q.dir .. "/" .. AUTO .. ".sql"), "буфер запроса закрыт")
   end)
   it(":SqlConn переписывает строку и переименовывает файл", function()
     local q = setup()
@@ -291,6 +292,24 @@ describe("постоянный запрос", function()
       eq("<Cmd>SqlDeploy<CR>", vim.fn.maparg("<F5>", mode), "файл, " .. mode)
     end
   end)
+  it(
+    "prune: вчерашние автоматические стираются, сегодняшние, названные и открытые — нет",
+    function()
+      local q = setup()
+      vim.fn.mkdir(q.dir, "p")
+      local yesterday = os.time() - 86400 * 2
+      for _, name in ipairs({ "a@b", "a@b~2", "a@b~3", "my", "c@d" }) do
+        local path = q.dir .. "/" .. name .. ".sql"
+        vim.fn.writefile({ "-- sqlquery: a/b" }, path)
+        if name ~= "c@d" then
+          vim.uv.fs_utime(path, yesterday, yesterday)
+        end
+      end
+      vim.cmd("silent edit " .. vim.fn.fnameescape(q.dir .. "/a@b~3.sql"))
+      q.prune()
+      eq({ "a@b~3", "c@d", "my" }, q.names())
+    end
+  )
 end)
 
 describe(":SqlExport", function()

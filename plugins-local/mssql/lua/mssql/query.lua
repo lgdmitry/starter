@@ -38,7 +38,7 @@
 -- В самом буфере запроса <leader>dx работает и в обычном режиме — на весь буфер,
 -- <leader>ds (:SqlConn) меняет его подключение и базу, а q закрывает окно, как и в окне
 -- с ответом (ценой записи макросов: в черновике запроса она нужна реже, чем закрыть его
--- тем же движением, что и ответ). С ! (:SqlQuery!, :SqlRun!) спрашиваются подключение и база.
+-- тем же движением, что и ответ); постоянный запрос q сохраняет и закрывает совсем. С ! (:SqlQuery!, :SqlRun!) спрашиваются подключение и база.
 
 local sql = require("mssql.conn")
 local target = require("mssql.target")
@@ -108,6 +108,30 @@ function M.names(arglead)
   end
   table.sort(out)
   return out
+end
+
+---Стереть автоматические запросы (`conn@db`, `conn@db~N`), не менявшиеся с прошлых
+---суток. <leader>dt заводит новый файл на каждый запрос, и они копились сотнями, хотя
+---нужны только сегодня. Файлом, а не временным буфером, они остаются ради того, чтобы
+---случайно закрытый запрос можно было открыть снова (:SqlQueryFile <Tab>), — на
+---следующий день это уже не нужно. Названные руками (:SqlQueryFile имя) живут, пока
+---их не удалят: имя им давали, чтобы сохранить. Граница — начало сегодняшнего дня, а не
+---24 часа: вчерашний вечерний запрос утром так же не нужен.
+---@param now? integer для тестов
+function M.prune(now)
+  local today = os.date("*t", now)
+  local since = os.time({ year = today.year, month = today.month, day = today.day, hour = 0 })
+  for _, path in ipairs(vim.fn.glob(M.dir .. "/*.sql", false, true)) do
+    local stat = vim.uv.fs_stat(path)
+    if
+      vim.fn.fnamemodify(path, ":t:r"):match(AUTO)
+      and stat
+      and stat.mtime.sec < since
+      and vim.fn.bufloaded(path) == 0
+    then
+      os.remove(path)
+    end
+  end
 end
 
 ---Есть ли ради чего делить окно: хоть один залистованный буфер с файлом. На пустом
@@ -211,8 +235,9 @@ local function map_keys(buf)
     "<cmd>SqlConn<cr>",
     { buffer = buf, desc = "Сменить подключение запроса" }
   )
-  -- окно закрывается, буфер остаётся жить: временный — bufhidden=hide, постоянный
-  -- сохраняется; текст вернётся тем же <leader>dq или :SqlQueryFile <имя>
+  -- временный буфер остаётся жить (bufhidden=hide) и вернётся тем же <leader>dq;
+  -- постоянный сохраняется и закрывается совсем — он уже на диске, а висеть в
+  -- bufferline после q ему незачем: вернуть можно через :SqlQueryFile <имя>
   vim.keymap.set("n", "q", function()
     local file = vim.b[buf].sqlquery == "file"
     if file then
@@ -224,6 +249,10 @@ local function map_keys(buf)
     if file or #vim.api.nvim_tabpage_list_wins(0) == 1 then
       if not pcall(vim.cmd, "buffer #") then
         vim.cmd("enew")
+      end
+      -- :bdelete, а не wipe: так # из этого окна по-прежнему ведёт в запрос
+      if file and vim.api.nvim_get_current_buf() ~= buf then
+        pcall(vim.cmd, "bdelete " .. buf)
       end
       return
     end
@@ -620,6 +649,7 @@ function M.export(opts)
 end
 
 function M.setup()
+  M.prune()
   -- Глобально: <leader>dq должен открывать черновик запроса откуда угодно, а не
   -- только из уже открытого .sql — иначе до базы приходится идти через :DBUI.
   local function map(mode, lhs, rhs, desc)
