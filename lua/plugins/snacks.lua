@@ -99,7 +99,7 @@ return {
         git_files = vim.tbl_deep_extend("force", vim.deepcopy(by_mtime), vim.deepcopy(deploy)),
         -- дефолт explorer рисует превью в узкой (40 колонок) панели под деревом;
         -- preview = "main" вместо неё показывает файл в главном окне редактора
-        explorer = vim.tbl_deep_extend("force", { layout = { preview = "main" } }, vim.deepcopy(deploy)),
+        explorer = vim.tbl_deep_extend("force", { layout = { preview = "main" }, hidden = true }, vim.deepcopy(deploy)),
       },
     },
   },
