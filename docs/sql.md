@@ -55,7 +55,8 @@ knows nothing about dadbod, `sqlcmd` or connections, and has its own specs in
   window — a file `stdpath("data")/sqlquery/conn@db.sql` (`conn@db~N.sql` when
   taken; older ones are reopened by name, `:SqlQueryFile <Tab>`) whose first line
   `-- sqlquery: conn/db` holds the binding (re-read on
-  `BufReadPost`/`BufWritePost`, so it survives restarts and sessions);
+  `BufReadPost`/`BufWritePost`, so it survives restarts and sessions; opening
+  one does not touch the server — see `mssql.complete` below);
   `:SqlConn` (`<leader>ds`, query buffers only) picks another connection and
   database for the current query buffer and renames an auto-named file.
   `q` in a query buffer goes back to the previous buffer; a scratch query stays
@@ -126,9 +127,16 @@ knows nothing about dadbod, `sqlcmd` or connections, and has its own specs in
   procedure header; `end`/`)`/`AS`/`from`/`where`/leading comma snap to their
   pair when typed (`indentkeys`; a comma there is `0\,`, `0<,>` doesn't work).
 - `plugins-local/mssql/lua/mssql/complete.lua` — sets `b:db` in ordinary `.sql` files (on the
-  first `InsertEnter`, by the `mssql.target` rules, never prompting), so that
+  first change in insert mode — `TextChangedI`, not `InsertEnter`: insert mode
+  is often entered by accident, and that alone shouldn't hit the server — by
+  the `mssql.target` rules, never prompting; the price is a one-time stall on
+  the first typed character), so that
   vim-dadbod-completion completes tables and columns by alias there too —
-  without `b:db` it completes nothing from the database.
+  without `b:db` it completes nothing from the database. Persistent queries get
+  `b:db` here as well (from their `-- sqlquery:` line), not on `BufReadPost`:
+  with `b:db` set, vim-dadbod-completion queries the server on `FileType`, and
+  a query restored from the session would hit it at startup — before
+  `config.sqldbs` has read the passwords, so `sqlcmd` asked for one.
 
 Every command takes `!` (and has an uppercase-key twin: `<leader>dD`,
 `<leader>dQ`, `<leader>dU`, `gK`) to pick the connection by hand instead of

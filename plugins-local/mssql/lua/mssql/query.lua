@@ -378,21 +378,20 @@ end
 
 ---Постоянный запрос открыт (BufReadPost) или сохранён (BufWritePost — строку
 ---подключения могли поправить руками): привязать по первой строке.
+---
+---b:db здесь не ставим, его ставит mssql.complete на первой правке в insert: с b:db
+---vim-dadbod-completion на FileType сразу идёт в базу за таблицами, а запросы из
+---восстановленной сессии открываются на старте — когда нужен ли вообще этот запрос
+---ещё неизвестно, а пароли из Credential Manager (config.sqldbs) ещё не дочитаны и
+---sqlcmd спрашивает пароль.
 function M.attach_file(buf)
   vim.b[buf].sqlquery = "file"
   map_keys(buf)
-  local ctx = M.parse_header(vim.api.nvim_buf_get_lines(buf, 0, 1, false)[1])
-  if not ctx then
-    -- без строки подключения — как черновик без привязки: :SqlRun спросит подключение
-    vim.b[buf].sqlctx = { file = "" }
-    vim.b[buf].db = nil
-    return
-  end
-  vim.b[buf].sqlctx = ctx
-  local ok, conn = pcall(function()
-    return sql.by_name(sql.connections(ctx.file), ctx.conn)
-  end)
-  vim.b[buf].db = ok and conn and sql.with_database(conn.url, ctx.db) or nil
+  -- строку могли сменить — пусть дополнение привяжется заново, уже к новой
+  vim.b[buf].db = nil
+  vim.b[buf].sqlcomplete_tried = nil
+  -- без строки подключения — как черновик без привязки: :SqlRun спросит подключение
+  vim.b[buf].sqlctx = M.parse_header(vim.api.nvim_buf_get_lines(buf, 0, 1, false)[1]) or { file = "" }
 end
 
 ---Спросить базу на сервере подключения. Первыми — preferred (если они есть на этом
