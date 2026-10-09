@@ -2,7 +2,11 @@ return {
   -- add gruvbox
   { "ellisonleao/gruvbox.nvim" },
 
-  -- Configure LazyVim to load gruvbox
+  -- kanagawa на пробу; вернуться на gruvbox — поменять colorscheme ниже
+  -- (или на лету :colorscheme gruvbox).
+  { "rebelot/kanagawa.nvim" },
+
+  -- Configure LazyVim to load kanagawa
   {
     "LazyVim/LazyVim",
     opts = {
