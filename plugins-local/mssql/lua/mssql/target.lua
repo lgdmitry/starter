@@ -99,7 +99,7 @@ end
 ---Окружения репозитория (имя -> адрес сервера) из его .mcp.environments.json.
 local function environments(root, conv)
   local data = read_json(root .. "/" .. (conv.mcpEnvironmentsPath or ".claude/.mcp.environments.json"))
-  -- адрес там — ${secret:MSSQL_DEVSERVER_*}, как его раскрывает сам mssql-mcp-server
+  -- адрес там — ${secret:MSSQL_SERVER_*}, как его раскрывает сам mssql-mcp-server
   for _, e in ipairs(data and data.environments or {}) do
     e.server = e.server and e.server:gsub("%${secret:([%w_]+)}", function(name)
       return os.getenv(name) or ""

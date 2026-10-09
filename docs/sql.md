@@ -152,8 +152,34 @@ path folder or the URL). Login/password always come from the connection with
 the same host: `g:dbs` in `lua/config/sqldbs.lua` — one connection per server
 (several per host, differing only in the database, made the host lookup pick
 the alphabetically first one) with `${VAR}` expanded from the environment
-(`SQLCMDUSER` etc.); a project `.env` (`DB_UI_*`, `tpope/vim-dotenv`) is still
-read, but `g:dbs` wins on a name clash.
+(`SQLCMDUSER` etc.; the host comes from `MSSQL_SERVER_<DB>`, the instance —
+`\snickers` for dev, `\test` for test — is set in the file itself); a project
+`.env` (`DB_UI_*`, `tpope/vim-dotenv`) is still read, but `g:dbs` wins on a
+name clash.
+
+Passwords are not in the environment but in Windows Credential Manager, as
+generic credentials `mssql:dev` and `mssql:test` (EXPRESS dev uses domain auth,
+`-E`; the other servers are outside the domain). Add one with
+`cmdkey /generic:mssql:dev /user:<login> /pass` (it prompts for the password).
+Environment variables are inherited by every process and leak into logs and
+agent transcripts; the credential store is DPAPI-encrypted and only hands out a
+password on an explicit request. `sqldbs.lua` builds `g:dbs` at startup without
+the stored passwords, then reads them asynchronously (one `powershell.exe`
+`CredRead` call, ~1 s) and rebuilds `g:dbs` — a `:DBUI` opened during that
+second caches the list without passwords; reopen it. Transitional fallback:
+while a credential is missing, `SQLCMDPASSWORD` / `MSSQL_TESTPASSWORD` from the
+environment are used; if both are missing a notification shows the `cmdkey`
+command. Passwords are percent-encoded in the URL (dadbod decodes them) and
+reach `sqlcmd` only through the child's environment, never `-P`.
+
+### Changing a password
+
+1. Overwrite the stored credential — `cmdkey /generic` replaces an existing
+   entry with the same target, no delete needed:
+   `cmdkey /generic:mssql:dev /user:<login> /pass` (or `mssql:test`).
+   Check with `cmdkey /list:mssql:dev`.
+2. Restart nvim: `g:dbs` is built at startup, and `:DBUI` keeps the list it
+   read first.
 
 ## Gotchas
 
