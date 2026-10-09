@@ -4,7 +4,9 @@
 -- Окон на всё про всё два, и следующий ответ ложится в готовое, а не добавляет сплит:
 -- код объекта — в вертикальном справа, всё, что читают как вывод (текст сообщения,
 -- строки таблицы, результат запроса, деплой), — в нижнем. То есть <leader>dx после
--- <leader>dd покажет результат там же, где лежал вывод деплоя.
+-- <leader>dd покажет результат там же, где лежал вывод деплоя. Исключение — список
+-- использований (<leader>du): его ищут по имени из результата запроса, и затирать
+-- этот результат нельзя, поэтому у списка своё окно — справа от нижнего.
 --
 -- В буфере остаются две переменные:
 --   b:sqlwin — вид окна, его место и куда вернуть курсор по q (кухня этого модуля);
@@ -13,9 +15,12 @@
 
 local M = {}
 
----Место окна: нижний сплит один на все виды вывода, вертикальный — на код объекта.
----Виды (kind) при этом остаются разными: по ним видно, что в окне показано.
+---Место окна: нижний сплит один на все виды вывода, кроме использований, вертикальный —
+---на код объекта. Виды (kind) при этом остаются разными: по ним видно, что в окне показано.
 local function slot_of(o)
+  if o.kind == "usages" then
+    return "usages"
+  end
   return o.bottom and "bottom" or "side"
 end
 
@@ -94,8 +99,14 @@ function M.show(o)
   if win == from then
     from = (vim.b[vim.api.nvim_win_get_buf(win)].sqlwin or {}).from or from
   end
+  local beside = slot == "usages" and not win and window_of("bottom")
   if win then
     vim.api.nvim_set_current_win(win)
+  elseif beside then
+    -- рядом с нижним, а не ещё одной полосой под ним: две полосы по 20 строк съедают
+    -- почти весь экран
+    vim.api.nvim_set_current_win(beside)
+    vim.cmd("rightbelow vsplit")
   elseif o.bottom then
     -- split, а не new: :new заводит пустой буфер, который мы тут же подменяем своим,
     -- и он остаётся в списке как [No Name] — по одному на каждый показ
@@ -116,7 +127,9 @@ function M.show(o)
   vim.bo[buf].filetype = o.filetype or "sql"
   keys(buf)
   pcall(vim.api.nvim_buf_set_name, buf, "sql://" .. o.title)
-  if o.bottom then
+  -- рядом с результатом высоту не трогаем: она у них общая, и короткий список
+  -- сплющил бы результат
+  if o.bottom and not (slot == "usages" and window_of("bottom")) then
     vim.api.nvim_win_set_height(0, math.min(20, math.max(5, #lines + 1)))
   end
   vim.api.nvim_win_set_cursor(0, { 1, 0 })

@@ -27,8 +27,9 @@ knows nothing about dadbod, `sqlcmd` or connections, and has its own specs in
   connection's own URL database — first when the connection was picked by hand
   (`gK`), last otherwise; deploy stays strict.
 - `plugins-local/mssql/lua/mssql/win.lua` — the result windows: one vertical split for object
-  code, one bottom split for everything read as output; the next answer
-  reuses the window. `b:sqlctx` in them keeps file/conn/db, so `K`,
+  code, one bottom split for everything read as output except `:SqlUsages`,
+  which gets its own window beside the bottom one so it never overwrites a
+  query result; the next answer reuses the window. `b:sqlctx` in them keeps file/conn/db, so `K`,
   `:SqlRows`, `:SqlRun` inside a result window go where the result came from.
   A focused result window always starts in normal mode, even when `<F5>` was
   pressed in insert.
