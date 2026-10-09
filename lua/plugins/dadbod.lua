@@ -12,7 +12,7 @@ require("config.sqldbs")
 --   :SqlDef (K, gK), :SqlRows (<leader>dr), :SqlEnum (<leader>de) — объект в базе
 --   :SqlUsages (<leader>du) — где в базах используется имя; :SqlFile (gf) — файл объекта
 --   :SqlQuery (<leader>dq), :SqlRun (<leader>dx) — разовый запрос рядом с процедурой
---   :SqlExport (<leader>do) — выполнить файл, ответ в <имя>.json рядом (данные proc-test)
+--   :SqlExport (<leader>do) — выполнить файл, ответ в <имя>.txt рядом
 --   :SqlQueryFile (<leader>dt) — постоянный запрос; :SqlConn (<leader>ds) — сменить
 --                                подключение буфера запроса
 --   :SqlWhere (<leader>di), :SqlCacheClear — куда пойдут команды, забыть кэши правил

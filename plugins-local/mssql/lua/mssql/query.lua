@@ -31,7 +31,7 @@
 --   (не <leader>dp: у LazyVim это группа profiler — <leader>dpp, <leader>dph, <leader>dps)
 --   <leader>dx   — выполнить выделенное (в визуальном режиме)
 --   <leader>do   — выполнить файл (в визуальном — выделенное) и записать ответ в файл
---                  (:SqlExport [путь], по умолчанию рядом <имя>.json, без for json — .txt)
+--                  (:SqlExport [путь], по умолчанию рядом <имя>.txt)
 --   <leader>dc   — прервать выполняющийся sqlcmd (:SqlCancel, см. mssql.conn)
 --   <F5>         — то же, что <leader>dx, но и в режиме вставки (в буфере запроса;
 --                  в остальных <F5> выкладывает файл, см. mssql.deploy)
@@ -47,7 +47,7 @@ local sqlwin = require("mssql.win")
 local M = {}
 
 ---До скольких символов sqlcmd режет колонки в выводе (-y/-Y).
-M.column_width = 50
+M.column_width = 255
 
 ---Где лежат постоянные запросы. Не в репозитории: там им пришлось бы жить в .gitignore
 ---каждого проекта, а запрос к dev-базе к коду проекта не относится.
@@ -518,80 +518,34 @@ function M.run(opts)
   end)
 end
 
----Вернёт ли запрос JSON: есть ли в нём for json вне комментариев и строк. Смотрим на
----текст, а не на ответ: от этого зависят флаги sqlcmd (без заголовков и обрезки), а
----они нужны до запуска.
-function M.returns_json(lines)
-  local text = table.concat(lines, "\n"):gsub("/%*.-%*/", " "):gsub("%-%-[^\n]*", " "):gsub("'[^']*'", " "):lower()
-  return text:find("for%s+json") ~= nil
-end
-
----Куда выгружать по умолчанию: рядом с файлом, то же имя с .json (01_data.sql →
----01_data.json — так ждёт данные скилл proc-test), а если запрос не for json — с .txt;
----у буфера без файла — в текущий каталог.
-function M.export_path(bufname, json)
-  local ext = json and ".json" or ".txt"
+---Куда выгружать по умолчанию: рядом с файлом, то же имя с .txt; у буфера без файла —
+---в текущий каталог.
+function M.export_path(bufname)
   if bufname ~= "" and not bufname:match("^%a[%w+.-]+://") then
-    return vim.fn.fnamemodify(bufname, ":r") .. ext
+    return vim.fn.fnamemodify(bufname, ":r") .. ".txt"
   end
-  return vim.fs.normalize(vim.uv.cwd()) .. "/export" .. ext
+  return vim.fs.normalize(vim.uv.cwd()) .. "/export.txt"
 end
 
----Флаги sqlcmd по расширению файла выгрузки. В .json — без заголовков и без обрезки:
-----y 0 делает и то и другое (-h -1 рядом с ним sqlcmd не принимает). Остальное —
----таблица, как в окне ответа, но колонки режутся на 8000, а не на M.column_width.
----CSV нет сознательно: sqlcmd не берёт значения в кавычки, а NULL в узкой колонке
----обрезает (NUL) — такой файл хуже, чем JSON из for json.
-function M.export_opts(path)
-  if path:lower():match("%.json$") then
-    return { width = 65535, trunc = 0 }, true
-  end
-  return { width = 65535, trunc = 8000 }, false
-end
+---Флаги sqlcmd для выгрузки: таблица, как в окне ответа, но колонки режутся на 8000, а
+---не на M.column_width. CSV нет сознательно: sqlcmd не берёт значения в кавычки, а NULL
+---в узкой колонке обрезает (NUL).
+M.export_opts = { width = 65535, trunc = 8000 }
 
----Вывод sqlcmd для файла: без хвостовых пустых строк. Для .json — ещё и склейка:
----сервер отдаёт результат for json строками по 2033 символа, и sqlcmd печатает каждую
----своей строкой, разрывая JSON посреди значения. Копим строки, пока накопленное не
----разберётся как JSON, — так каждый набор снова одна строка (префикс массива или
----объекта валидным JSON быть не может). Сообщения сервера (Warning: Null value is
----eliminated…, print) sqlcmd пишет туда же, в stdout, — в файл их не кладём, а
----возвращаем отдельно: строка вне набора, начинающаяся не с [ или {, — сообщение.
----Не разобралось — файл всё равно пишется, но с предупреждением: обычно это значит,
----что в скрипте забыли for json.
----@return string[] lines, boolean valid, string[] messages
-function M.export_text(text, json)
+---Вывод sqlcmd для файла: без хвостовых пустых строк.
+---@return string[]
+function M.export_text(text)
   local lines = vim.split(text, "\n", { plain = true })
   while #lines > 0 and vim.trim(lines[#lines]) == "" do
     lines[#lines] = nil
   end
-  if not json then
-    return lines, true, {}
-  end
-  local out, acc, messages = {}, {}, {}
-  for _, line in ipairs(lines) do
-    if #acc == 0 and not line:match("^%s*[%[{]") then
-      if vim.trim(line) ~= "" then
-        messages[#messages + 1] = line
-      end
-    else
-      acc[#acc + 1] = line
-      local joined = table.concat(acc)
-      if pcall(vim.json.decode, joined) then
-        out[#out + 1], acc = joined, {}
-      end
-    end
-  end
-  local valid = #out > 0 and #acc == 0
-  vim.list_extend(out, acc)
-  -- JSON нет вовсе — пишем сообщения, иначе файл пуст и не видно почему
-  return #out > 0 and out or messages, valid, messages
+  return lines
 end
 
 ---Текст скрипта к выгрузке: BOM файла остаётся в первой строке текстом (в
 ---fileencodings нет ucs-bom). В начале входа sqlcmd его съедает, а после вставленной
----строки он — «Incorrect syntax near '?'». Снимаем все: файлы proc-test приходят и с
----двумя BOM подряд. SET NOCOUNT — без «(N rows affected)»: в JSON они ломают файл, в
----таблице только мешают.
+---строки он — «Incorrect syntax near '?'». Снимаем все: бывают файлы и с двумя BOM
+---подряд. SET NOCOUNT — без «(N rows affected)»: в таблице они только мешают.
 local function export_lines(lines)
   lines = vim.list_extend({}, lines)
   while (lines[1] or ""):sub(1, 3) == "\239\187\191" do
@@ -603,12 +557,11 @@ end
 ---Выполнить и записать ответ в path. Ошибка sqlcmd — файл не трогаем, ответ в окне.
 ---done(true) — файл записан.
 local function export_to(lines, path, conn, database, file, done)
-  local flags, json = M.export_opts(path)
   sql.run({
     conn = conn,
     db = database,
     lines = lines,
-    opts = flags,
+    opts = M.export_opts,
     progress = ("выгрузка с %s/%s… (<leader>dc — отменить)"):format(conn.name, database),
     title = "SqlExport",
   }, function(code, text)
@@ -632,18 +585,9 @@ local function export_to(lines, path, conn, database, file, done)
       })
       return done(false)
     end
-    local out, valid, messages = M.export_text(text, json)
     vim.fn.mkdir(vim.fs.dirname(path), "p")
-    vim.fn.writefile(out, path)
+    vim.fn.writefile(M.export_text(text), path)
     notify(("%s/%s → %s"):format(conn.name, database, path))
-    if not valid then
-      notify(
-        vim.fn.fnamemodify(path, ":t") .. ": не JSON — в скрипте нет for json?",
-        vim.log.levels.WARN
-      )
-    elseif #messages > 0 then
-      notify("сообщения сервера (в файл не попали):\n" .. table.concat(messages, "\n"))
-    end
     done(true)
   end)
 end
@@ -675,9 +619,8 @@ function M.export(opts)
   end
   lines = export_lines(lines)
   local arg = vim.trim(opts.args or "")
-  local path = vim.fs.normalize(
-    arg ~= "" and vim.fn.fnamemodify(arg, ":p") or M.export_path(vim.api.nvim_buf_get_name(0), M.returns_json(lines))
-  )
+  local path =
+    vim.fs.normalize(arg ~= "" and vim.fn.fnamemodify(arg, ":p") or M.export_path(vim.api.nvim_buf_get_name(0)))
   pick(opts.bang, function(conn, database, file)
     export_to(lines, path, conn, database, file, function(ok)
       if ok then
@@ -696,7 +639,7 @@ local function file_lines(path)
   return vim.api.nvim_buf_get_lines(buf, 0, -1, false)
 end
 
----Выгрузить пачку файлов из пикера (<leader>do): каждый — в свой .json/.txt рядом, как
+---Выгрузить пачку файлов из пикера (<leader>do): каждый — в свой .txt рядом, как
 ---:SqlExport в самом файле, но без открытия ответов: из пикера выгружают пачкой, и
 ---десяток сплитов только мешал бы. Подключение — по правилам каждого файла, а с
 ---pick — одно, спрошенное раз на всю пачку. По очереди, а не разом: прогресс и
@@ -744,7 +687,7 @@ function M.export_files(files, opts)
     end
     lines = export_lines(lines)
     local function run(conn, database)
-      local path = M.export_path(src, M.returns_json(lines))
+      local path = M.export_path(src)
       export_to(lines, path, conn, database, src, function(ok)
         if not ok then
           failed[#failed + 1] = vim.fn.fnamemodify(src, ":t")
@@ -797,12 +740,12 @@ function M.setup()
   )
   map("x", "<leader>dx", ":<C-u>'<,'>SqlRun<cr>", "Выполнить выделенный запрос")
   map("x", "<F5>", ":<C-u>'<,'>SqlRun<cr>", "Выполнить выделенный запрос")
-  map("n", "<leader>do", "<cmd>SqlExport<cr>", "Выполнить файл, ответ — в .json/.txt рядом")
+  map("n", "<leader>do", "<cmd>SqlExport<cr>", "Выполнить файл, ответ — в .txt рядом")
   map(
     "x",
     "<leader>do",
     ":<C-u>'<,'>SqlExport<cr>",
-    "Выполнить выделенное, ответ — в .json/.txt рядом"
+    "Выполнить выделенное, ответ — в .txt рядом"
   )
 
   vim.api.nvim_create_user_command("SqlQuery", M.open, {
@@ -830,7 +773,7 @@ function M.setup()
     range = true,
     nargs = "?",
     complete = "file",
-    desc = "Выполнить буфер или выделение, ответ записать в файл (по умолчанию рядом <имя>.json или .txt без for json; ! — выбрать подключение и базу)",
+    desc = "Выполнить буфер или выделение, ответ записать в файл (по умолчанию рядом <имя>.txt; ! — выбрать подключение и базу)",
   })
 
   -- Постоянные запросы привязываются к подключению при каждом открытии, в том числе

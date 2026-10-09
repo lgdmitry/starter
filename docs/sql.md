@@ -166,21 +166,18 @@ either (`-f i:65001` vs `-f 65001` vs a BOM all behave differently, and it
 seems to mirror whatever encoding it detected in the input file); detect the
 bytes instead, which is what `mssql.conn.output_to_utf8` does.
 
-`:SqlExport` (`<leader>do`) writes the result to `<name>.json` next to the
-file, or to `<name>.txt` (a plain table) when the query has no `FOR JSON`
-outside comments and string literals. The decision is made from the query
-text, not the output: the `sqlcmd` flags (no headers, no truncation for JSON)
-must be chosen before it runs. An explicit path picks the mode by its
-extension instead. The written file is opened in a vertical split (or reloaded
+The answer window (`:SqlRun`, `<leader>dx`) truncates columns at 255 chars
+(`mssql.query.column_width`, `sqlcmd -y/-Y`).
+
+`:SqlExport` (`<leader>do`) writes the result as a plain table to
+`<name>.txt` next to the file (or to an explicit path), columns truncated at
+8000 chars. The written file is opened in a vertical split (or reloaded
 where it is already shown). In a snacks picker / explorer `<leader>do`
 (`<leader>dO` — one connection for the whole batch) exports Tab-selected `.sql`
 files one by one via `mssql.query.export_files`, each next to its source and by
-its own rules, without opening anything. Three things it has to undo: a file's BOM stays in the first buffer line
-as text (`fileencodings` has no `ucs-bom`, proc-test files may even carry two),
-and once `SET NOCOUNT ON;` is prepended the server sees it as `Incorrect syntax
-near '?'` — so leading BOMs are stripped; `FOR JSON` comes back in 2033-char
-rows that `sqlcmd` prints one per line — consecutive lines are joined until
-they parse; server messages (`Warning: Null value is eliminated…`, `print`)
-share stdout — they go to a notification, not the file. Note that the dgsql
+its own rules, without opening anything. A file's BOM stays in the first buffer
+line as text (`fileencodings` has no `ucs-bom`, some files even carry two), and
+once `SET NOCOUNT ON;` is prepended the server sees it as `Incorrect syntax
+near '?'` — so leading BOMs are stripped. Note that the dgsql
 dev server reports itself as `EXPRESS-DEV\SNICKERS` (`@@servername`) — that
 is not the esql box (`tank22`).
