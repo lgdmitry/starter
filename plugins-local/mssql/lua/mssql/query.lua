@@ -18,7 +18,8 @@
 --               в файле не сохранишь, а строку видно, её можно поправить руками (после
 --               :w она перечитывается), и файл при копировании уносит её с собой.
 --               Имя файла — `conn@db.sql` (`~N` при совпадении), :SqlConn
---               переименовывает файл вслед за подключением.
+--               переименовывает файл вслед за подключением, q добавляет метку из
+--               запроса (`conn@db~orders.sql`), а пустой — стирает.
 -- Оба привязаны к подключению через b:sqlctx, как и окна ответа, поэтому новый буфер
 -- запроса, открытый из буфера запроса, берёт подключение текущего, а не правила.
 --
@@ -81,13 +82,78 @@ function M.is_query_file(path)
   return path:sub(1, #dir) == dir and path:match("%.sql$") ~= nil
 end
 
----Имя файла, заведённого самим <leader>dt: `conn@db`, с `~N` при совпадении. Только такие
----:SqlConn переименовывает — названные руками (:SqlQueryFile имя) остаются как есть.
-local AUTO = "^[^@]+@[^@~]+~?%d*$"
+---Имя файла, заведённого самим <leader>dt: `conn@db`, с `~N` при совпадении, а после q —
+---`conn@db~метка` (см. M.slug). Только такие :SqlConn и q переименовывают, а prune
+---стирает — названные руками (:SqlQueryFile имя) остаются как есть.
+local function is_auto(name)
+  return name:match("^[^@]+@[^@~]+$") ~= nil or name:match("^[^@]+@[^@~]+~[^@]+$") ~= nil
+end
+
+---Метка из имени автоматического файла: `conn@db~orders~2` → orders, у `conn@db~2` — нет.
+local function slug_of(name)
+  local tail = name:match("^[^@]+@[^@~]+~(.+)$")
+  tail = tail and tail:gsub("~%d+$", "")
+  if tail and not tail:match("^%d+$") then
+    return tail
+  end
+end
+
+---Строка, пригодная в имя файла: без запрещённых в Windows знаков и без ~/@ (ими
+---размечено само имя), не длиннее 40 символов.
+local function clean(s)
+  s = vim.fn.strcharpart(vim.trim((s:gsub('[/\\:*?"<>|~@%s]+', "_"))), 0, 40)
+  s = s:gsub("^_+", ""):gsub("_+$", "")
+  return s ~= "" and s or nil
+end
+
+---Метка запроса для имени файла: по ней запрос узнают в :SqlQueryFile <Tab> среди
+---десятка `conn@db~N`. Первая строка после заголовка, если это комментарий, — его
+---писали как раз как подпись; иначе первый объект после from/join/exec/update/into
+---(без схемы, скобок, табличных переменных и #временных таблиц).
+---@return string?
+function M.slug(lines)
+  local body = {}
+  for i, line in ipairs(lines) do
+    if not (i == 1 and M.parse_header(line)) then
+      body[#body + 1] = line
+    end
+  end
+  for _, line in ipairs(body) do
+    if vim.trim(line) ~= "" then
+      local comment = line:match("^%s*%-%-+%s*(.-)%s*$")
+      if comment and comment ~= "" then
+        return clean(comment)
+      end
+      break
+    end
+  end
+  local text = table.concat(body, "\n"):gsub("/%*.-%*/", " "):gsub("%-%-[^\n]*", " "):gsub("'[^']*'", " ")
+  local keywords = { from = true, join = true, exec = true, execute = true, update = true, into = true }
+  for pos, word in text:gmatch("()([%a_]+)") do
+    if keywords[word:lower()] then
+      local ident = text:match('^%s+([%w_%.%[%]"#@]+)', pos + #word)
+      local name = ident and ident:gsub('[%[%]"]', ""):match("([^%.]+)$")
+      if name and not name:match("^[#@]") then
+        return clean(name)
+      end
+    end
+  end
+end
+
+---Пустой ли постоянный запрос: кроме строки подключения — ничего.
+function M.is_empty(lines)
+  for i, line in ipairs(lines) do
+    if vim.trim(line) ~= "" and not (i == 1 and M.parse_header(line)) then
+      return false
+    end
+  end
+  return true
+end
 
 ---Путь постоянного запроса к паре. self — сам переименовываемый файл: его имя не занято.
-local function auto_path(conn, database, self)
-  local base = ("%s/%s@%s"):format(M.dir, conn, database)
+---slug — метка после `~`.
+local function auto_path(conn, database, self, slug)
+  local base = ("%s/%s@%s"):format(M.dir, conn, database) .. (slug and "~" .. slug or "")
   local path, n = base .. ".sql", 1
   -- диск регистронезависимый: dgsql_dev@Crocus и dgsql_dev@crocus — один файл
   while vim.uv.fs_stat(path) and path:lower() ~= (self or ""):lower() do
@@ -124,7 +190,7 @@ function M.prune(now)
   for _, path in ipairs(vim.fn.glob(M.dir .. "/*.sql", false, true)) do
     local stat = vim.uv.fs_stat(path)
     if
-      vim.fn.fnamemodify(path, ":t:r"):match(AUTO)
+      is_auto(vim.fn.fnamemodify(path, ":t:r"))
       and stat
       and stat.mtime.sec < since
       and vim.fn.bufloaded(path) == 0
@@ -172,6 +238,27 @@ local function scratch_name(buf, conn, database)
   end
 end
 
+---Записать постоянный запрос под путём new (тот же — просто сохранить), старый файл стереть.
+local function move(buf, new)
+  local old = vim.fs.normalize(vim.api.nvim_buf_get_name(buf))
+  vim.api.nvim_buf_call(buf, function()
+    if new == old then
+      return vim.cmd("silent update")
+    end
+    vim.cmd("silent keepalt file " .. vim.fn.fnameescape(new))
+    vim.cmd("silent write")
+  end)
+  if new:lower() ~= old:lower() then
+    os.remove(old)
+    -- :file оставляет незалистованный буфер со старым именем (keepalt не помогает),
+    -- и в него вёл бы # — в файл, которого уже нет
+    local stale = buf_by_name(old)
+    if stale and stale ~= buf then
+      pcall(vim.api.nvim_buf_delete, stale, { force = true })
+    end
+  end
+end
+
 ---Привязать буфер запроса к подключению и базе. b:sqlctx — та же переменная, что у окон
 ---с ответом (mssql.win): благодаря ей K, <leader>dr и новый <leader>dq отсюда
 ---идут в эту же базу, а не в ту, которую вычислили бы по имени буфера; b:db — для
@@ -193,23 +280,8 @@ local function bind(buf, conn, database, file)
     -- сразу на диск: иначе смена подключения потерялась бы вместе с несохранённым
     -- буфером, а следующий запуск пошёл бы по старой строке
     local old = vim.fs.normalize(vim.api.nvim_buf_get_name(buf))
-    local new = vim.fn.fnamemodify(old, ":t:r"):match(AUTO) and auto_path(conn.name, database, old) or old
-    vim.api.nvim_buf_call(buf, function()
-      if new == old then
-        return vim.cmd("silent update")
-      end
-      vim.cmd("silent keepalt file " .. vim.fn.fnameescape(new))
-      vim.cmd("silent write")
-    end)
-    if new:lower() ~= old:lower() then
-      os.remove(old)
-      -- :file оставляет незалистованный буфер со старым именем (keepalt не помогает),
-      -- и в него вёл бы # — в файл, которого уже нет
-      local stale = buf_by_name(old)
-      if stale and stale ~= buf then
-        pcall(vim.api.nvim_buf_delete, stale, { force = true })
-      end
-    end
+    local name = vim.fn.fnamemodify(old, ":t:r")
+    move(buf, is_auto(name) and auto_path(conn.name, database, old, slug_of(name)) or old)
   end
   -- дополнение запомнило таблицы прошлой базы
   if vim.fn.exists("*vim_dadbod_completion#fetch") == 1 then
@@ -238,10 +310,20 @@ local function map_keys(buf)
   -- временный буфер остаётся жить (bufhidden=hide) и вернётся тем же <leader>dq;
   -- постоянный сохраняется и закрывается совсем — он уже на диске, а висеть в
   -- bufferline после q ему незачем: вернуть можно через :SqlQueryFile <имя>
+  -- Пустой постоянный запрос (одна строка подключения) по q стирается с диска: его
+  -- заводили и передумали, а в :SqlQueryFile <Tab> он только мешал бы. Непустой с
+  -- автоматическим именем получает метку из запроса (M.slug) — conn@db~N потом не
+  -- отличить друг от друга.
   vim.keymap.set("n", "q", function()
     local file = vim.b[buf].sqlquery == "file"
-    if file then
-      vim.cmd("silent update")
+    local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+    local empty = file and M.is_empty(lines)
+    local path = vim.fs.normalize(vim.api.nvim_buf_get_name(buf))
+    if file and not empty then
+      local ctx = vim.b[buf].sqlctx or {}
+      local name = vim.fn.fnamemodify(path, ":t:r")
+      local slug = is_auto(name) and ctx.conn and ctx.db and M.slug(lines)
+      move(buf, slug and auto_path(ctx.conn, ctx.db, path, slug) or path)
     end
     -- постоянный открыт в текущем окне, а не в своём сплите — окно чужое, его не
     -- закрываем; единственное окно :close не закроет (E444) — в обоих случаях просто
@@ -250,9 +332,14 @@ local function map_keys(buf)
       if not pcall(vim.cmd, "buffer #") then
         vim.cmd("enew")
       end
-      -- :bdelete, а не wipe: так # из этого окна по-прежнему ведёт в запрос
       if file and vim.api.nvim_get_current_buf() ~= buf then
-        pcall(vim.cmd, "bdelete " .. buf)
+        if empty then
+          os.remove(path)
+          pcall(vim.api.nvim_buf_delete, buf, { force = true })
+        else
+          -- :bdelete, а не wipe: так # из этого окна по-прежнему ведёт в запрос
+          pcall(vim.cmd, "bdelete " .. buf)
+        end
       end
       return
     end

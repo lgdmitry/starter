@@ -59,8 +59,14 @@ knows nothing about dadbod, `sqlcmd` or connections, and has its own specs in
   `:SqlConn` (`<leader>ds`, query buffers only) picks another connection and
   database for the current query buffer and renames an auto-named file.
   `q` in a query buffer goes back to the previous buffer; a scratch query stays
-  hidden for the next `<leader>dq`, a persistent one is saved and deleted.
-  Auto-named persistent files (`conn@db`, `conn@db~N`) last only for the day:
+  hidden for the next `<leader>dq`, a persistent one is saved and deleted. On
+  `q` an empty persistent query (only the `-- sqlquery:` line) is removed from
+  disk, and an auto-named one gets a label from the query (`mssql.query.slug`:
+  a leading `--` comment, else the first object after
+  `from`/`join`/`exec`/`update`/`into`) — `conn@db~Orders.sql`, so it can be
+  told apart in `:SqlQueryFile <Tab>`; `:SqlConn` keeps the label.
+  Auto-named persistent files (`conn@db`, `conn@db~N`, `conn@db~label[~N]`)
+  last only for the day:
   `setup()` removes those not modified since the start of today (open ones
   excepted); files named by hand stay until removed.
   Both kinds carry `b:sqlctx`, so a query buffer opened from a query buffer
