@@ -27,9 +27,15 @@ knows nothing about dadbod, `sqlcmd` or connections, and has its own specs in
   connection's own URL database — first when the connection was picked by hand
   (`gK`), last otherwise; deploy stays strict.
 - `plugins-local/mssql/lua/mssql/win.lua` — the result windows: one vertical split for object
-  code, one bottom split for everything read as output except `:SqlUsages`,
-  which gets its own window beside the bottom one so it never overwrites a
-  query result; the next answer reuses the window. `b:sqlctx` in them keeps file/conn/db, so `K`,
+  code, one bottom split for query results and deploy output, and one window
+  beside the bottom one for lookups made from them — message text, enum
+  values, table rows, `:SqlUsages` — so `K` on a tvID in a query result never
+  overwrites the result, and inside object code never replaces the code (a
+  new result opens to the left of an open lookup, not as a second strip); the
+  next answer of the same kind reuses its window, but the previous one is not
+  wiped: it stays a hidden buffer and `<C-o>` / `<C-i>` in the window walk
+  back and forth (`mssql.win.keep` = 30 answers; the same object again
+  replaces its older answer). `b:sqlctx` in them keeps file/conn/db, so `K`,
   `:SqlRows`, `:SqlRun` inside a result window go where the result came from.
   A focused result window always starts in normal mode, even when `<F5>` was
   pressed in insert.
@@ -52,13 +58,16 @@ knows nothing about dadbod, `sqlcmd` or connections, and has its own specs in
   buffer bound to the connection and database of the current file;
   `:SqlQueryFile [name]` (`<leader>dt`; not `<leader>dp` — that is LazyVim's
   profiler group): a new persistent one every time, opened in the current
-  window — a file `stdpath("data")/sqlquery/conn@db.sql` (`conn@db~N.sql` when
+  window (from a result window — in the window the result came from, not over
+  the result) — a file `stdpath("data")/sqlquery/conn@db.sql` (`conn@db~N.sql` when
   taken; older ones are reopened by name, `:SqlQueryFile <Tab>`) whose first line
   `-- sqlquery: conn/db` holds the binding (re-read on
   `BufReadPost`/`BufWritePost`, so it survives restarts and sessions; opening
   one does not touch the server — see `mssql.complete` below);
-  `:SqlConn` (`<leader>ds`, query buffers only) picks another connection and
-  database for the current query buffer and renames an auto-named file.
+  `:SqlConn` (`<leader>ds`) picks another connection and database for the
+  current query buffer and renames an auto-named file; in an ordinary `.sql`
+  file it writes (or replaces) a `-- sqlquery: conn/db` first line instead —
+  the file's pinned target, see "Target resolution".
   `q` in a query buffer goes back to the previous buffer; a scratch query stays
   hidden for the next `<leader>dq`, a persistent one is saved and deleted. On
   `q` an empty persistent query (only the `-- sqlquery:` line) is removed from
@@ -144,6 +153,17 @@ by the rules.
 
 ## Target resolution
 
+A `-- sqlquery: conn/db` first line (the persistent query's header; a BOM
+before it is fine) beats every rule below, in any `.sql` file: `<leader>dd`,
+`K`, completion and the status line go to that connection and database without
+asking, and an `icsMaster` file is *not* copied to the repo's other servers.
+This is for one-off scripts kept outside a repo (a scratch folder), where the
+rules have nothing to go on and every deploy used to ask for the connection.
+Set it with `<leader>ds` or type it; the line is read from the open buffer, so
+an unsaved edit already counts. An unknown connection name asks rather than
+falling back to the rules; a database missing on the server refuses; picking
+another connection by hand (`!`) ignores the line's database.
+
 Target server and databases are resolved by `mssql.target` from the repo's
 `.claude/repo-conventions.json` (the same rules the `deploy-commit` skill
 uses): server by the top folder's environment, address from
@@ -210,10 +230,12 @@ bytes instead, which is what `mssql.conn.output_to_utf8` does.
 The answer window (`:SqlRun`, `<leader>dx`) truncates columns at 255 chars
 (`mssql.query.column_width`, `sqlcmd -y/-Y`).
 
-`:SqlExport` (`<leader>do`) writes the result as a plain table to
+`:SqlExport` (`<leader>do`; `<leader>dO` / `!` picks the connection and
+database) writes the result as a plain table to
 `<name>.txt` next to the file (or to an explicit path), columns truncated at
-8000 chars. The written file is opened in a vertical split (or reloaded
-where it is already shown). In a snacks picker / explorer `<leader>do`
+8000 chars. The written file is opened in the current window, no split — the
+export is wide and read on its own; `<C-o>` goes back (or it is reloaded and
+focused where it is already shown). In a snacks picker / explorer `<leader>do`
 (`<leader>dO` — one connection for the whole batch) exports Tab-selected `.sql`
 files one by one via `mssql.query.export_files`, each next to its source and by
 its own rules, without opening anything. A file's BOM stays in the first buffer

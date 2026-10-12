@@ -60,6 +60,8 @@ M.ROOT = t.repo({
     ["Crocus/copied_PRC.sql"] = M.GUARD:format("0x3000000"),
     ["ServiceControle/e_PRC.sql"] = "select 1",
     ["icsMaster/f_PRC.sql"] = "select 1",
+    -- цель первой строкой важнее правил и не уезжает на второй сервер
+    ["icsMaster/pinned.sql"] = "-- sqlquery: dgsql_dev/icsMaster\nselect 1",
     -- Alter/**: база — первой строкой; BOM — как у файлов из настоящего репозитория
     ["Alter/Alter_2609/buh.sql"] = "\239\187\191-- buh\r\n-- виконувати послідовно\r\nselect 1",
     ["Alter/Alter_2609/ua_master.sql"] = "--ua, master\nselect 1",
@@ -74,7 +76,14 @@ M.ROOT = t.repo({
 -- обычный репозиторий: без repo-conventions.json, работают запасные правила
 M.PLAIN = t.repo({
   name = "plain",
-  files = { ["DEV_NEW/x_PRC.sql"] = "select 1", ["misc/y.sql"] = "select 1" },
+  files = {
+    ["DEV_NEW/x_PRC.sql"] = "select 1",
+    ["misc/y.sql"] = "select 1",
+    -- разовый скрипт с целью первой строкой (BOM — как бывает у файлов из Windows)
+    ["misc/pinned.sql"] = "\239\187\191-- sqlquery: crocus_dev/servicecontrole\r\nselect 1",
+    ["misc/typo.sql"] = "-- sqlquery: nope_dev/Crocus\nselect 1",
+    ["misc/nodb.sql"] = "-- sqlquery: crocus_dev/ics_ua97\nselect 1",
+  },
 })
 
 ---Копия подключения по имени — чтобы тест не испортил общую таблицу.

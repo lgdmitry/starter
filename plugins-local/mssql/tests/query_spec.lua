@@ -117,11 +117,13 @@ describe("временный буфер", function()
     eq("ics_ua97", offered[1])
     eq({ file = FILE, conn = "dgsql_dev", db = "ics_ua97" }, vim.b.sqlctx)
   end)
-  it(":SqlConn вне буфера запроса ничего не меняет", function()
+  it(":SqlConn не в .sql и не в буфере запроса ничего не меняет", function()
     local q, log = setup()
+    vim.cmd("enew")
     answer({})
     q.switch()
     eq(nil, vim.b.sqlctx)
+    eq({ "" }, t.lines(0))
     eq(vim.log.levels.WARN, log.notes[#log.notes].level)
   end)
 end)
@@ -378,6 +380,28 @@ describe("постоянный запрос", function()
   )
 end)
 
+describe("файл из окна ответа", function()
+  it(
+    "постоянный запрос открывается не в окне ответа, а там, откуда в него пришли",
+    function()
+      local q = setup()
+      local src = vim.api.nvim_get_current_win()
+      require("mssql.win").show({
+        kind = "query",
+        title = "r",
+        text = "1",
+        bottom = true,
+        ctx = { file = FILE, conn = "dgsql_dev", db = "ics_ua97" },
+      })
+      local answer_win = vim.api.nvim_get_current_win()
+      q.open_file({ args = "", bang = false })
+      eq(src, vim.api.nvim_get_current_win())
+      eq(true, vim.b.sqlquery == "file")
+      t.truthy(vim.b[vim.api.nvim_win_get_buf(answer_win)].sqlwin, "ответ на месте")
+    end
+  )
+end)
+
 describe(":SqlExport", function()
   it(
     "по умолчанию — рядом с файлом .txt, у буфера без файла — в каталог",
@@ -427,13 +451,13 @@ describe(":SqlExport", function()
       sql.run = function(_, cb)
         cb(1, "Msg 102, Level 15")
       end
-      vim.cmd("wincmd p")
+      vim.cmd("buffer #")
       q.export({ range = 0, args = out, bang = false })
       eq({ "a", "-", "1" }, read(out), "после ошибки")
     end
   )
   it(
-    "открывает файл ответа рядом, повторная выгрузка — перечитывает его",
+    "открывает файл ответа в текущем окне, повторная выгрузка — перечитывает его",
     function()
       local q = setup()
       local sql = require("mssql.conn")
@@ -447,12 +471,12 @@ describe(":SqlExport", function()
       local out = vim.fs.normalize(vim.fn.tempname()) .. "/d.txt"
       q.export({ range = 0, args = out, bang = false })
       eq(out, vim.fs.normalize(vim.api.nvim_buf_get_name(0)))
-      eq(2, #vim.api.nvim_tabpage_list_wins(0))
-      vim.cmd("wincmd p")
+      eq(1, #vim.api.nvim_tabpage_list_wins(0), "без сплита")
+      vim.cmd("buffer #")
       answer_text = "a\n2\n"
       q.export({ range = 0, args = out, bang = false })
       eq(out, vim.fs.normalize(vim.api.nvim_buf_get_name(0)))
-      eq(2, #vim.api.nvim_tabpage_list_wins(0), "второго сплита нет")
+      eq(1, #vim.api.nvim_tabpage_list_wins(0), "без сплита")
       eq({ "a", "2" }, vim.api.nvim_buf_get_lines(0, 0, -1, false))
     end
   )
@@ -480,4 +504,21 @@ describe(":SqlExport", function()
       os.remove(F.ROOT .. "/Crocus/d_PRC.txt")
     end
   )
+end)
+
+describe(":SqlConn в обычном файле", function()
+  it("записывает цель первой строкой, повторно — заменяет", function()
+    local q = setup()
+    vim.api.nvim_buf_set_lines(0, 0, -1, false, { "\239\187\191select 1" })
+    vim.b.sqltarget = { conn = "dgsql_dev", host = "dgsql", dbs = { "ics_ua97" } }
+    answer({ "crocus_dev", "ServiceControle" })
+    q.switch()
+    eq({ "-- sqlquery: crocus_dev/ServiceControle", "select 1" }, t.lines(0), "BOM снят")
+    eq(nil, vim.b.sqltarget, "статус забыл прежнюю цель")
+    answer({ "dgsql_dev", "datagroup" })
+    q.switch()
+    eq({ "-- sqlquery: dgsql_dev/datagroup", "select 1" }, t.lines(0))
+    eq(nil, vim.b.sqlquery, "буфером запроса не стал")
+    vim.cmd("silent edit!")
+  end)
 end)

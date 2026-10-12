@@ -21,6 +21,37 @@ local function setup(reply)
   return require("mssql.object"), log
 end
 
+describe("enum и строки не затирают код объекта", function()
+  local function code_then(fn)
+    local obj = setup(function(on_done)
+      on_done(0, "create procedure dbo.x", false)
+      return {}
+    end)
+    obj.define({ fargs = { "dbo.x" } })
+    vim.wait(200, function()
+      return vim.b.sqlwin ~= nil
+    end)
+    local code = vim.api.nvim_get_current_buf()
+    fn(obj)
+    vim.wait(200, function()
+      return #vim.api.nvim_tabpage_list_wins(0) == 3
+    end)
+    eq(3, #vim.api.nvim_tabpage_list_wins(0))
+    eq(true, vim.api.nvim_buf_is_valid(code), "код процедуры на месте")
+    eq("aside", vim.b.sqlwin.slot)
+  end
+  it("K на tvID внутри кода — enum внизу", function()
+    code_then(function(obj)
+      obj.enum({ fargs = { "123" } })
+    end)
+  end)
+  it("строки таблицы из кода — внизу", function()
+    code_then(function(obj)
+      obj.rows({ fargs = { "dbo.t" } })
+    end)
+  end)
+end)
+
 describe(":SqlDef", function()
   it("отменённый K не показывает окна и не ругается", function()
     local obj, log = setup(function(on_done)

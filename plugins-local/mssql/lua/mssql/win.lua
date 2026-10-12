@@ -1,12 +1,19 @@
 -- Окна с ответом sqlcmd: код объекта, строки таблицы, текст сообщения, вывод деплоя.
 -- Раньше то же самое было написано дважды — в deploy и в object.
 --
--- Окон на всё про всё два, и следующий ответ ложится в готовое, а не добавляет сплит:
--- код объекта — в вертикальном справа, всё, что читают как вывод (текст сообщения,
--- строки таблицы, результат запроса, деплой), — в нижнем. То есть <leader>dx после
--- <leader>dd покажет результат там же, где лежал вывод деплоя. Исключение — список
--- использований (<leader>du): его ищут по имени из результата запроса, и затирать
--- этот результат нельзя, поэтому у списка своё окно — справа от нижнего.
+-- Окон на всё про всё три, и следующий ответ ложится в готовое, а не добавляет сплит:
+-- код объекта — в вертикальном справа, результат запроса и вывод деплоя — в нижнем
+-- (<leader>dx после <leader>dd покажет результат там же, где лежал вывод деплоя), а
+-- справка по значению из них — текст сообщения, значения enum, строки таблицы, список
+-- использований — в окне рядом с нижним. Справку ищут по номеру или имени прямо из
+-- результата запроса (K на tvID в ответе), и в нижнем окне она затирала бы сам результат;
+-- в боковом — код процедуры, из которой её смотрят.
+--
+-- Прошлый ответ при этом не стирается: он остаётся скрытым буфером, и <C-o> в окне
+-- возвращает к нему (<C-i> — обратно). Новое окно на каждый K раскладку бы не
+-- удержало, а стирать — значит терять код процедуры, от которой ушли по K к соседней.
+-- Хранятся последние M.keep ответов, одинаковый ответ (тот же объект там же)
+-- вытесняет прежний.
 --
 -- В буфере остаются две переменные:
 --   b:sqlwin — вид окна, его место и куда вернуть курсор по q (кухня этого модуля);
@@ -15,11 +22,54 @@
 
 local M = {}
 
----Место окна: нижний сплит один на все виды вывода, кроме использований, вертикальный —
----на код объекта. Виды (kind) при этом остаются разными: по ним видно, что в окне показано.
+---Сколько прошлых ответов держать скрытыми буферами.
+M.keep = 30
+
+local history = {}
+
+---Запомнить ответ; лишние — самые старые из скрытых — стереть.
+local function remember(buf)
+  history = vim.tbl_filter(vim.api.nvim_buf_is_valid, history)
+  history[#history + 1] = buf
+  local extra = #history - M.keep
+  for i = 1, #history do
+    if extra <= 0 then
+      break
+    end
+    local old = history[i]
+    if vim.fn.bufwinid(old) == -1 then
+      pcall(vim.api.nvim_buf_delete, old, { force = true })
+      extra = extra - 1
+    end
+  end
+  history = vim.tbl_filter(vim.api.nvim_buf_is_valid, history)
+end
+
+---Имя ответа: такой же скрытый ответ (тот же объект там же) уступает имя новому, а
+---видимый в другом окне — нет, тогда к имени добавляется номер буфера (имена буферов
+---обязаны быть уникальными — E95).
+local function set_name(buf, name)
+  for _, other in ipairs(vim.api.nvim_list_bufs()) do
+    if other ~= buf and vim.api.nvim_buf_get_name(other) == name then
+      if vim.fn.bufwinid(other) == -1 then
+        pcall(vim.api.nvim_buf_delete, other, { force = true })
+      else
+        name = ("%s (%d)"):format(name, buf)
+      end
+      break
+    end
+  end
+  pcall(vim.api.nvim_buf_set_name, buf, name)
+end
+
+---Справка по значению из ответа — её место рядом с нижним окном (slot "aside").
+local ASIDE = { usages = true, message = true, enum = true, rows = true }
+
+---Место окна: вертикальное — код объекта, нижнее — результат и деплой, рядом с нижним —
+---справка. Виды (kind) при этом остаются разными: по ним видно, что в окне показано.
 local function slot_of(o)
-  if o.kind == "usages" then
-    return "usages"
+  if ASIDE[o.kind] then
+    return "aside"
   end
   return o.bottom and "bottom" or "side"
 end
@@ -66,6 +116,16 @@ local function keys(buf)
   end, { buffer = buf, desc = "Закрыть окно" })
 end
 
+---Уйти из окна ответа туда, откуда в него пришли, — перед тем как открыть файл «в текущем
+---окне» (постоянный запрос, выгрузка): иначе файл ложился в полосу ответа, а следующий
+---ответ открывал под ней ещё одну — окно уже не помечено как окно ответа.
+function M.leave_answer()
+  local w = vim.b.sqlwin
+  if w and w.from and vim.api.nvim_win_is_valid(w.from) then
+    vim.api.nvim_set_current_win(w.from)
+  end
+end
+
 ---Закрыть текущее окно и вернуться в from, если оно ещё живо, — q и в окне ответа, и в
 ---черновике запроса.
 function M.close_to(from)
@@ -99,14 +159,15 @@ function M.show(o)
   if win == from then
     from = (vim.b[vim.api.nvim_win_get_buf(win)].sqlwin or {}).from or from
   end
-  local beside = slot == "usages" and not win and window_of("bottom")
+  -- справка — рядом с нижним, а не ещё одной полосой под ним: две полосы по 20 строк
+  -- съедают почти весь экран; и наоборот — результат встаёт слева от уже открытой справки
+  local paired = slot == "aside" and "bottom" or slot == "bottom" and "aside"
+  local beside = not win and paired and window_of(paired)
   if win then
     vim.api.nvim_set_current_win(win)
   elseif beside then
-    -- рядом с нижним, а не ещё одной полосой под ним: две полосы по 20 строк съедают
-    -- почти весь экран
     vim.api.nvim_set_current_win(beside)
-    vim.cmd("rightbelow vsplit")
+    vim.cmd(slot == "aside" and "rightbelow vsplit" or "leftabove vsplit")
   elseif o.bottom then
     -- split, а не new: :new заводит пустой буфер, который мы тут же подменяем своим,
     -- и он остаётся в списке как [No Name] — по одному на каждый показ
@@ -116,9 +177,10 @@ function M.show(o)
   end
 
   local buf = vim.api.nvim_create_buf(false, true)
-  vim.api.nvim_win_set_buf(0, buf) -- прошлый буфер с bufhidden=wipe тут же удаляется
+  -- nvim_win_set_buf сам ставит метку в списке переходов окна: <C-o> вернёт прошлый ответ
+  vim.api.nvim_win_set_buf(0, buf)
   vim.bo[buf].buftype = "nofile"
-  vim.bo[buf].bufhidden = "wipe"
+  vim.bo[buf].bufhidden = "hide"
   vim.bo[buf].swapfile = false
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
   vim.bo[buf].modifiable = false
@@ -126,10 +188,11 @@ function M.show(o)
   vim.b[buf].sqlctx = o.ctx
   vim.bo[buf].filetype = o.filetype or "sql"
   keys(buf)
-  pcall(vim.api.nvim_buf_set_name, buf, "sql://" .. o.title)
+  set_name(buf, "sql://" .. o.title)
+  remember(buf)
   -- рядом с результатом высоту не трогаем: она у них общая, и короткий список
   -- сплющил бы результат
-  if o.bottom and not (slot == "usages" and window_of("bottom")) then
+  if o.bottom and not (paired and window_of(paired)) then
     vim.api.nvim_win_set_height(0, math.min(20, math.max(5, #lines + 1)))
   end
   vim.api.nvim_win_set_cursor(0, { 1, 0 })

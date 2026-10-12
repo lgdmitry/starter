@@ -310,7 +310,8 @@ local function message_job(conn, dbs, file, id)
   }
 end
 
----Значения enum по tvID — тем же окном, что и состав объекта.
+---Значения enum по tvID — в нижнем окне, как текст сообщения: это вывод, а не код. В
+---боковом (так было) K на tvID внутри кода процедуры затирал саму процедуру.
 local function enum_job(conn, dbs, file, id)
   return {
     conn = conn,
@@ -318,7 +319,9 @@ local function enum_job(conn, dbs, file, id)
     file = file,
     title = "enum " .. id,
     opts = { query = ENUM:format(id, id, id), width = 8000, trunc = 50 },
+    kind = "enum",
     filetype = "",
+    bottom = true,
   }
 end
 
@@ -388,7 +391,11 @@ function M.rows(opts)
         width = 8000,
         trunc = 30,
       },
+      -- строки — вывод, их место внизу: из бокового окна <leader>dr на таблице в коде
+      -- процедуры затирал саму процедуру
+      kind = "rows",
       filetype = "",
+      bottom = true,
     }, 1)
   end)
 end

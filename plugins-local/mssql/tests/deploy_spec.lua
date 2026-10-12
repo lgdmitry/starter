@@ -112,4 +112,32 @@ describe("deploy_files", function()
     end)
     eq("crocus_dev/ServiceControle crocus_dev@ServiceControle.sql", seen)
   end)
+  it(
+    "скрипт вне репозитория с целью первой строкой — без вопросов",
+    function()
+      local path = vim.fs.normalize(vim.fn.tempname()) .. "/scratch/fix.sql"
+      vim.fn.mkdir(vim.fs.dirname(path), "p")
+      vim.fn.writefile({ "-- sqlquery: dgsql_dev/icsMaster", "select 1" }, path)
+      vim.cmd("silent edit! " .. vim.fn.fnameescape(path))
+      local sql = t.fresh()
+      t.stub_sql(sql, fx.SERVERS, fx.CONNS)
+      sql.ensure = function()
+        return true
+      end
+      sql.select = function()
+        error("подключение спросили")
+      end
+      local seen = {}
+      sql.sqlcmd = function(conn, db, args, on_done)
+        seen[#seen + 1] = conn.name .. "/" .. db .. " " .. vim.fs.basename(args[#args])
+        on_done(0, "", false)
+        return {}
+      end
+      require("mssql.deploy").deploy({ fargs = {} })
+      vim.wait(200, function()
+        return #seen > 0
+      end)
+      eq({ "dgsql_dev/icsMaster fix.sql" }, seen, "icsMaster — только туда, без crocus")
+    end
+  )
 end)

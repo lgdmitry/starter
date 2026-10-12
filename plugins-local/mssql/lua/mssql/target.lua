@@ -16,6 +16,12 @@
 --
 -- Без repo-conventions.json (обычный репозиторий) работают запасные правила:
 -- dev-подключение по имени/хосту и база из первой папки пути либо из URL.
+--
+-- Важнее всех правил — цель, записанная в самом файле первой строкой
+-- `-- sqlquery: conn/db` (как у постоянного запроса, mssql.query; ставится через
+-- <leader>ds). Это для разовых скриптов в своей папке вне репозитория: правилам там
+-- зацепиться не за что, dev-подключений несколько, и каждый <leader>dd спрашивал
+-- подключение заново, а базу брал из URL.
 
 local sql = require("mssql.conn")
 
@@ -61,6 +67,34 @@ local function repo_folder(file)
     return nil, nil, nil
   end
   return rel:match("^([^/]+)/"), vim.fs.basename(root), root
+end
+
+---Строка цели в начале файла; та же, что у постоянного запроса (mssql.query).
+M.HEADER = "^%-%-%s*sqlquery:%s*([^/%s]+)/(%S+)"
+
+---Первая строка файла: из открытого буфера, если он есть, — строку могли вписать
+---(или поменять через <leader>ds) и ещё не сохранить, а K и статус смотрят сразу.
+---Буфер ищем перебором, а не bufnr(): тот матчит имя как шаблон.
+local function first_line(file)
+  local want = vim.fs.normalize(file):lower()
+  for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+    if vim.api.nvim_buf_is_loaded(buf) and vim.fs.normalize(vim.api.nvim_buf_get_name(buf)):lower() == want then
+      return vim.api.nvim_buf_get_lines(buf, 0, 1, false)[1] or ""
+    end
+  end
+  return sql.read_file(file):match("^[^\r\n]*")
+end
+
+---Цель, записанная в файле первой строкой `-- sqlquery: conn/db`.
+---@return { conn: string, db: string }?
+function M.pinned(file)
+  if not file or file == "" then
+    return nil
+  end
+  local conn, db = first_line(file):gsub("^\239\187\191", ""):match(M.HEADER)
+  if conn then
+    return { conn = conn, db = db }
+  end
 end
 
 local json_cache = {}
@@ -379,6 +413,11 @@ end
 ---Сервер для файла: environment верхней папки, иначе defaultServerEnvironment.
 ---@return table? conn nil — правил нет и запасные не сработали, спрашиваем
 function M.resolve_connection(file, list)
+  local pin = M.pinned(file)
+  if pin then
+    -- опечатка в имени — спросить, а не молча уйти туда, куда ведут правила
+    return sql.by_name(list, pin.conn)
+  end
   local first, _, root = repo_folder(file)
   local conv = conventions(root)
   if conv then
@@ -407,6 +446,17 @@ end
 ---мультидеплой), иначе правило по пути, иначе запасное правило по папке/URL.
 ---@return string[] databases, string? how откуда они взялись или почему их нет — для сообщения
 function M.resolve_databases(file, conn, list)
+  -- строка цели говорит и о базе, но только для своего подключения: выбрали руками
+  -- другое (!) — база по правилам, как будто строки нет
+  local pin = M.pinned(file)
+  if pin and pin.conn:lower() == conn.name:lower() then
+    local how = ("по первой строке «-- sqlquery: %s/%s»"):format(pin.conn, pin.db)
+    local exact = server_databases(conn)[pin.db:lower()]
+    if not exact then
+      return {}, ("%s: базы %s на %s нет"):format(how, pin.db, conn.name)
+    end
+    return { exact }, how
+  end
   -- Alter/** решает только первая строка: без неё — отказ, а не база из URL
   local alter, alter_how = database_by_alter(file, conn)
   if alter ~= nil then
@@ -483,6 +533,10 @@ local EVERY_SERVER = { icsmaster = true }
 ---выкладки по правилам: подключение, выбранное руками, значит «туда и только туда».
 ---@return { conn: table, databases: string[] }[]
 function M.other_servers(file, conn, dbs, list)
+  -- строка цели называет один сервер — значит «туда и только туда», как выбор руками
+  if M.pinned(file) then
+    return {}
+  end
   local shared = vim.tbl_filter(function(db)
     return EVERY_SERVER[db:lower()]
   end, dbs)
