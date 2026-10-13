@@ -17,10 +17,9 @@ end
 -- LazyVim ставит LSP-маппинги (<leader>c…) через 100 мс после LspAttach, когда which-key
 -- уже пересобрал триггеры. Тогда Vim ждёт продолжения, сочетание срабатывает напрямую, а
 -- окна нет. Поэтому после каждого буферного маппинга сбрасываем кэш which-key для этого
--- буфера: он пересобирается (для текущего буфера — по своему таймеру в 50 мс, для
--- остальных — на BufEnter) и ставит триггеры заново, уже после маппинга. Перехватываем
--- vim.keymap.set: хука на «появился маппинг» нет, а маппинги ставят и LazyVim, и наш
--- SQL-слой, и плагины.
+-- буфера: он пересобирается и ставит триггеры заново, уже после маппинга (см. ниже
+-- rebuild_after_clear). Перехватываем vim.keymap.set: хука на «появился маппинг» нет, а
+-- маппинги ставят и LazyVim, и наш SQL-слой, и плагины.
 local function refresh_on_buffer_maps()
   local pending = {}
   local set = vim.keymap.set
@@ -47,10 +46,39 @@ local function refresh_on_buffer_maps()
   end
 end
 
+-- Сброшенный буфер which-key пересобирает сам: чужой — на BufEnter, текущий — по таймеру
+-- (50 мс). Но таймер сверяется не с текущим буфером, а с последним, на котором был
+-- BufEnter. Если с тех пор буфер сменился без BufEnter обратно (окно ответа,
+-- nvim_buf_call…), таймер считает всё готовым, и пробел остаётся без триггера, пока в
+-- буфер не зайти заново. Сбрасывают кэш не только мы: which-key сам делает это на
+-- LspAttach, а copilot подключается к буферу с задержкой и маппингов не ставит. Поэтому
+-- подменяем сам clear: сброшен текущий буфер — пересобираем его сразу.
+local function rebuild_after_clear()
+  local wkbuf = require("which-key.buf")
+  -- opts могут вычисляться повторно (:Lazy reload) — не оборачиваем обёртку
+  if wkbuf._rebuild_after_clear then
+    return
+  end
+  wkbuf._rebuild_after_clear = true
+  local clear = wkbuf.clear
+  ---@diagnostic disable-next-line: duplicate-set-field
+  wkbuf.clear = function(opts)
+    clear(opts)
+    local buf = opts and opts.buf
+    -- schedule: пусть событие, которое сбросило кэш, сначала доработает
+    vim.schedule(function()
+      if not buf or buf == vim.api.nvim_get_current_buf() then
+        wkbuf.get()
+      end
+    end)
+  end
+end
+
 return {
   "folke/which-key.nvim",
   init = refresh_on_buffer_maps,
   opts = function(_, opts)
+    rebuild_after_clear()
     opts.spec = opts.spec or {}
     table.insert(opts.spec, {
       mode = { "n", "x" },
