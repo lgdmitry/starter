@@ -610,14 +610,17 @@ local function set_col(d, i, target)
 end
 
 local function align_decls(decls)
-  -- Колонки — только от самого длинного элемента блока (§1, S21): тип — через 2 пробела
-  -- после имени, NOT NULL — через 1 после типа, комментарий — через 1 после NULL.
-  -- На то, как блок был выровнен раньше, не смотрим: легаси выровнено как попало.
-  local ends = {}
+  -- Колонки — от самого длинного элемента блока (§1, S21): тип — через 2 пробела после
+  -- имени, NOT NULL — через 1 после типа, комментарий — через 1 после NULL. Но тип не
+  -- сдвигается левее того, где стоит сейчас ни у одной строки: пробелы между именем и
+  -- типом только добавляются. Иначе форматирование сжимало бы выравнивание, которое
+  -- автор уже задал шире.
+  local ends, cur = {}, 0
   for _, d in ipairs(decls) do
     ends[#ends + 1] = col_after(d.rec, d.name)
+    cur = math.max(cur, col_before(d.rec, d.type))
   end
-  local T = math.max(unpack(ends)) + 2
+  local T = math.max(math.max(unpack(ends)) + 2, cur)
   for _, d in ipairs(decls) do
     set_col(d, d.type, T)
   end

@@ -221,6 +221,16 @@ describe("объявления (S21)", function()
       run("declare\n   @RetCode int\n  ,@DocumentSum money -- сума\n  ,@ClientName varchar(250)")
     )
   end)
+  it(
+    "широкий промежуток между именем и типом не сжимается, узкие строки догоняют его",
+    function()
+      local wide = string.rep(" ", 17)
+      eq(
+        ("declare\n   @a%sint\n  ,@LongerName%sint"):format(wide, string.rep(" ", 8)),
+        run("declare\n   @a" .. wide .. "int\n  ,@LongerName int")
+      )
+    end
+  )
 end)
 
 describe("диапазон", function()
