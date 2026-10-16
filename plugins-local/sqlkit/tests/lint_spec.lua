@@ -83,6 +83,60 @@ describe("токенные правила", function()
   end)
 end)
 
+describe("S10: from — одна таблица", function()
+  it(
+    "запятая между источниками в from — нарушение, в том числе на новой строке",
+    function()
+      eq({ "1:S10" }, found("select a.ID from A a, B b"))
+      eq({ "3:S10" }, found(src({ "select a.ID", "from A a", "  ,B b" })))
+    end
+  )
+  it(
+    "запятая в аргументах функции и в derived table, join, следующая инструкция — чисто",
+    function()
+      eq({}, found("select dbo.f(a, b) from A a join B b on b.ID = a.ID"))
+      eq({}, found(src({ "select t.a", "from (select a, b from T) t", "  join S s on s.a = t.a" })))
+      eq({}, found(src({ "select a", "from A a", "set @x = 1, @y = 2" })))
+    end
+  )
+  it(
+    "from команды restore и fetch — не запрос; следующий select обрывает список",
+    function()
+      eq({}, found(src({ "restore database X", "FROM  DISK = N'a.bak'", "  with move N'd' to N'e', stats = 10" })))
+      eq({}, found("fetch next from c into @a, @b"))
+      eq({}, found(src({ "select a from #T", "", "select", "   i = ROW_NUMBER() over(order by t.a)," })))
+    end
+  )
+  it("update … from и подзапрос в скобках — проверяются", function()
+    eq({ "1:S10" }, found("update t set a = 1 from A a, B b where a.ID = b.ID"))
+    eq({ "1:S10" }, found("set @x = (select a.ID from A a, B b)"))
+  end)
+end)
+
+describe("S67: RAISERROR с текстом", function()
+  it(
+    "текст в строке — нарушение, в том числе N'…' и без пробелов",
+    function()
+      eq({ "1:S67" }, found("RAISERROR('Документ не найден', 16, 10) WITH SETERROR"))
+      eq({ "1:S67" }, found("raiserror(N'x', 16, 10)"))
+    end
+  )
+  it("код, переменная — чисто", function()
+    eq({}, found("RAISERROR(60002, 16, 10, '@dcID') WITH SETERROR"))
+    eq({}, found("RAISERROR(@msg, 16, 10)"))
+  end)
+end)
+
+describe("S69: Author / Last в заголовке", function()
+  it("строки Author / Last в /* */ — нарушение на каждой строке", function()
+    eq({ "3:S69", "4:S69" }, found(src({ "/*", " Desc : x", " Author : Ivanov", " Last : 2026", "*/", "select 1" })))
+  end)
+  it("строка-комментарий --, другие поля — чисто", function()
+    eq({}, found("-- Author : Ivanov\nselect 1"))
+    eq({}, found(src({ "/*", " Desc : x", " Author Ivanov", "*/", "select 1" })))
+  end)
+end)
+
 describe("S52: case в одну строку", function()
   it("однострочный — нарушение, многострочный — нет", function()
     eq({ "1:S52" }, found("set @t = case when @a = 1 then 1 else 0 end"))

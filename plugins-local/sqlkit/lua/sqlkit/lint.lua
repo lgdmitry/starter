@@ -381,6 +381,76 @@ function rules.exists(sig, add)
   end
 end
 
+-- S67: сообщение поднимается по коду. Текст в RAISERROR — только старые процедуры, и они
+-- не проверяются: линтер смотрит лишь изменённые строки.
+function rules.raiserror_text(sig, add)
+  for i, t in ipairs(sig) do
+    local arg = sig[i + 2]
+    if call(sig, i, "raiserror") and arg and arg.k == "string" then
+      add(
+        arg,
+        "S67",
+        "новое сообщение — по коду: RAISERROR(<код>, 16, 10, …), не текст в строке"
+      )
+    end
+  end
+end
+
+-- S10: from называет одну таблицу, остальные — через join. Запятая на уровне from — это
+-- ещё один источник. Список кончается на слове join / where / … или на следующей инструкции;
+-- запятая внутри скобок — аргумент функции или колонки подзапроса, не источник.
+local FROM_END = tok.set([[
+  join inner left right full cross outer apply where group order having union except
+  intersect option for select with
+]])
+
+-- from бывает и не в запросе: restore database … from disk = …, fetch … from cursor. Там
+-- свои запятые, поэтому смотрим назад до слова того же уровня: DML — да, команда — нет.
+local DML_OWNER = tok.set("select with insert update delete merge")
+local NOT_DML = tok.set([[
+  exec execute restore backup dbcc use grant revoke drop create alter declare fetch open
+  close deallocate truncate throw raiserror print return if while begin goto waitfor
+]])
+
+local function from_in_dml(sig, i)
+  local t = sig[i]
+  for k = i - 1, 1, -1 do
+    local s = sig[k]
+    if s.b ~= t.b or s.d < t.d then
+      return false
+    end
+    if s.d == t.d then
+      if DML_OWNER[lower(s) or ""] then
+        return true
+      end
+      if NOT_DML[lower(s) or ""] then
+        return false
+      end
+    end
+  end
+  return false
+end
+
+function rules.from_one(sig, add)
+  for i, t in ipairs(sig) do
+    if is_word(t, "from") and not after_dot(sig, i) and from_in_dml(sig, i) then
+      for j = i + 1, #sig do
+        local s = sig[j]
+        if s.b ~= t.b or s.d < t.d then
+          break
+        end
+        if s.d == t.d and (FROM_END[lower(s) or ""] or line_start(sig, j) and stmt_word(sig, j)) then
+          break
+        end
+        if s.d == t.d and s.k == "comma" then
+          add(s, "S10", "from называет одну таблицу — остальные через join")
+          break
+        end
+      end
+    end
+  end
+end
+
 -- P14: IP-объект (cht_IPGetRooms) зовут только из других dbo-объектов, права там даёт
 -- цепочка владения — GRANT на него лишний.
 function rules.grant_ip(sig, add)
@@ -877,6 +947,30 @@ function rules.bare_end(sig, add, ctx)
     local c = rec and rec.toks[e.ti + 1]
     if c and is_comment(c) and c.l == e.l then
       add(c, "P16", "тело закрывается голым END, без комментария")
+    end
+  end
+end
+
+-- S69: в /* … */-заголовке нет строк Author / Last — авторство и даты живут в git. Строки
+-- проверяются по строке, а не по токену: заголовок многострочный, и находка стоит на своей.
+function rules.header_author(sig, add, ctx)
+  for _, rec in ipairs(ctx.recs) do
+    for _, t in ipairs(rec.toks) do
+      if t.k == "block" then
+        local ln = t.l
+        for text in (t.s .. "\n"):gmatch("([^\n]*)\n") do
+          text = text:gsub("\r$", "")
+          local low = text:lower()
+          if low:match("^%s*author%s*:") or low:match("^%s*last%s*:") then
+            add(
+              { l = ln, c = #text:match("^%s*"), s = text },
+              "S69",
+              "заголовок без строк Author / Last — авторство в git"
+            )
+          end
+          ln = ln + 1
+        end
+      end
     end
   end
 end
