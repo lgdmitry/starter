@@ -101,9 +101,8 @@ or variable, which only shows up when the server rejects it.
 
 ## Conventions
 
-- Code comments and commit bodies are **in Russian**, and explain *why*
-  rather than *what* — a comment here usually documents the non-obvious
-  reason behind a decision.
-- Commits follow conventional commits; **subject in English**, body in
-  Russian.
+- Code comments are **in Russian**, and explain *why* rather than *what* — a
+  comment here usually documents the non-obvious reason behind a decision.
+- Commits follow conventional commits; **subject and body in English**, and
+  the body explains *why* rather than *what*.
 - Formatting via `stylua` (`stylua.toml`).
