@@ -42,7 +42,13 @@ knows nothing about dadbod, `sqlcmd` or connections, and has its own specs in
 - `plugins-local/mssql/lua/mssql/deploy.lua` — `:SqlDeploy` (`<leader>dd`,
   `<F5>` in normal/insert): deploy the current `.sql` file; `:SqlDeployFiles` (and `<leader>dd` on Tab-selected
   entries in a snacks picker / explorer, action in `lua/plugins/snacks.lua`)
-  deploys several at once. A file going into `icsMaster` is deployed to every
+  deploys several at once; `:SqlDeployCommit [коммит]` (default `HEAD`, `!` to
+  pick the connection) deploys the `_VIW`, `_TRG`, `_PRC` files of a commit in
+  that order, bound to `<leader>dC` (HEAD; another commit by the command
+  argument) (suffix case-insensitive; inside `_PRC` the IP procedures
+  `*_IP<letter>*` go first), the rest of the commit is skipped. It
+  refuses to deploy anything if one of those files differs from the commit on
+  disk or has an unsaved buffer, because the deploy reads the disk. A file going into `icsMaster` is deployed to every
   server of the repo that has that database (dgsql: datagroup *and* billing/
   crocus) — `mssql.target.other_servers`; only when the connection came from the
   rules, not with `!` or an explicit connection name. In a persistent query

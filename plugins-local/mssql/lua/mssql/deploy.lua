@@ -21,6 +21,10 @@
 -- Пачкой: :SqlDeployFiles <файлы> и то же <leader>dd по выделенным (Tab) записям в
 -- snacks-пикере и explorer (действие заведено в lua/plugins/snacks.lua); с выбором
 -- подключения — :SqlDeployFiles! и <leader>dD там же.
+--
+-- Объекты коммита: :SqlDeployCommit [коммит] — из коммита только _VIW, _TRG, _PRC,
+-- в этом порядке; по правилам выкладки те же, что у <leader>dd. Клавиша <leader>dC —
+-- HEAD; с другим коммитом — :SqlDeployCommit <коммит>.
 
 local sql = require("mssql.conn")
 local target = require("mssql.target")
@@ -339,6 +343,134 @@ function M.deploy_files(files, opts)
   end, sqls[1])
 end
 
+---Порядок видов при выкладке коммита: представление раньше триггеров, триггеры раньше
+---процедур — процедура, которая читает вью или вызывает триггерную логику, без них
+---не создастся. Внутри процедур IP-шные (_IPGet, _IPIns, _IPUpd, _IPDel и т.д.) идут
+---первыми: они — точка входа, которую вызывают остальные. Остальные виды (таблицы,
+---alter и т.п.) в эту команду не входят.
+local KIND_ORDER = { VIW = 1, TRG = 2 }
+local RANK_IP_PRC = 3
+local RANK_PRC = 4
+
+---Ранг файла или nil, если его в коммит выкладывать не нужно. `_IP` с буквой после —
+---признак IP-процедуры (`ic_IPgetProfileName` тоже); без `_` перед IP не считается,
+---чтобы `TCPIPForCirpack` не попал в первую очередь.
+---@param name string
+---@return integer?
+local function commit_rank(name)
+  local kind = name:upper():match("_(%u%u%u)%.SQL$")
+  if kind == "PRC" then
+    return name:find("_IP%a") and RANK_IP_PRC or RANK_PRC
+  end
+  return KIND_ORDER[kind or ""]
+end
+
+---Оставляет из путей коммита только _VIW/_TRG/_PRC и ставит их в порядок видов;
+---внутри вида — порядок git. Регистр суффикса не важен: в репозитории есть и .SQL.
+---@param names string[] пути файлов коммита
+---@return string[]
+function M.commit_objects(names)
+  local picked = {}
+  for i, name in ipairs(names) do
+    local rank = commit_rank(name)
+    if rank then
+      picked[#picked + 1] = { name = name, rank = rank, idx = i }
+    end
+  end
+  table.sort(picked, function(a, b)
+    if a.rank ~= b.rank then
+      return a.rank < b.rank
+    end
+    return a.idx < b.idx
+  end)
+  return vim.tbl_map(function(p)
+    return p.name
+  end, picked)
+end
+
+---git в корне репозитория; core.quotepath=off — иначе кириллические имена придут
+---в кавычках с escape-последовательностями и не совпадут с путями на диске.
+---@return string[]? lines
+---@return string? errmsg
+local function git(root, args)
+  local cmd = { "git", "-C", root, "-c", "core.quotepath=off" }
+  vim.list_extend(cmd, args)
+  local res = vim.system(cmd, { text = true }):wait()
+  if res.code ~= 0 then
+    return nil, vim.trim(res.stderr or "")
+  end
+  return vim.split(res.stdout or "", "\n", { trimempty = true })
+end
+
+---Буфер с файлом изменён и не сохранён: сохранять его при выкладке коммита нельзя —
+---выложилось бы не то, что записано в коммите.
+local function modified_buffer(file)
+  local want = vim.fs.normalize(file):lower()
+  for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+    if vim.bo[buf].modified and vim.fs.normalize(vim.api.nvim_buf_get_name(buf)):lower() == want then
+      return true
+    end
+  end
+  return false
+end
+
+---:SqlDeployCommit [коммит] — выложить объекты коммита (_VIW, _TRG, _PRC) по правилам
+---<leader>dd. Файлы берутся с диска, поэтому выкладка идёт, только если они совпадают
+---с коммитом: иначе в базу уехала бы незакоммиченная правка, которой в коммите нет.
+---@param opts table аргументы команды: [1] — коммит (по умолчанию HEAD); ! — как у :SqlDeployFiles!
+function M.deploy_commit(opts)
+  if not sql.ensure("SqlDeployCommit") then
+    return
+  end
+  local commit = opts.fargs[1] or "HEAD"
+  local here = vim.api.nvim_buf_get_name(0)
+  local dir = here ~= "" and vim.fs.dirname(here) or vim.fn.getcwd()
+  local top, terr = git(dir, { "rev-parse", "--show-toplevel" })
+  if not top then
+    return notify("не git-репозиторий: " .. (terr or "?"), vim.log.levels.ERROR)
+  end
+  local root = top[1]
+
+  local changed, cerr = git(root, { "diff-tree", "--no-commit-id", "--name-only", "-r", "--diff-filter=AMR", commit })
+  if not changed then
+    return notify("коммит " .. commit .. ": " .. (cerr or "?"), vim.log.levels.ERROR)
+  end
+  local names = M.commit_objects(changed)
+  if #names == 0 then
+    return notify("в коммите " .. commit .. " нет _VIW/_TRG/_PRC файлов", vim.log.levels.WARN)
+  end
+
+  local files, problems = {}, {}
+  for _, name in ipairs(names) do
+    local path = root .. "/" .. name
+    if vim.fn.filereadable(path) == 0 then
+      problems[#problems + 1] = name .. ": нет на диске"
+    elseif modified_buffer(path) then
+      problems[#problems + 1] = name .. ": буфер изменён и не сохранён"
+    else
+      files[#files + 1] = path
+    end
+  end
+  local differs, derr = git(root, vim.list_extend({ "diff", "--name-only", commit, "--" }, names))
+  if not differs then
+    return notify("сравнение с коммитом: " .. (derr or "?"), vim.log.levels.ERROR)
+  end
+  for _, name in ipairs(differs) do
+    problems[#problems + 1] = name .. ": отличается от коммита"
+  end
+  if #problems > 0 then
+    return notify(
+      "коммит "
+        .. commit
+        .. " не выложен, сначала приведите файлы к коммиту:\n"
+        .. table.concat(problems, "\n"),
+      vim.log.levels.ERROR
+    )
+  end
+
+  M.deploy_files(files, { pick = opts.bang })
+end
+
 function M.setup()
   -- Клавиши глобальные, а не буферные: группа <leader>d у LazyVim отдана debug, но
   -- extra с dap не подключён, и держать SQL-клавиши только в sql-буферах значило, что
@@ -349,6 +481,7 @@ function M.setup()
   end
   map("<leader>dd", "<cmd>SqlDeploy<cr>", "Выложить .sql через sqlcmd")
   map("<leader>dD", "<cmd>SqlDeploy!<cr>", "Выложить .sql, выбрав подключение")
+  map("<leader>dC", "<cmd>SqlDeployCommit<cr>", "Выложить _VIW/_TRG/_PRC файлы коммита (HEAD)")
   -- <F5> — «запустить» одной клавишей во всех режимах, включая insert (через <leader>
   -- туда не дотянуться, см. mssql.query): в файле — выложить, а в буфере запроса его
   -- перекрывает буферный <F5> — выполнить запрос.
@@ -380,6 +513,12 @@ function M.setup()
     bang = true,
     complete = "file",
     desc = "Выложить несколько .sql файлов через sqlcmd (цели — по правилам; ! — выбрать подключение)",
+  })
+
+  vim.api.nvim_create_user_command("SqlDeployCommit", M.deploy_commit, {
+    nargs = "?",
+    bang = true,
+    desc = "Выложить _VIW/_TRG/_PRC файлы коммита (по умолчанию HEAD) через sqlcmd; ! — выбрать подключение",
   })
 end
 

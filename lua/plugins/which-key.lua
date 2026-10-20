@@ -87,6 +87,7 @@ return {
       { "<leader>d", group = "sql", icon = { cat = "filetype", name = "sql" }, real = false },
       { "<leader>dd", icon = icon("󰕒", "azure") },
       { "<leader>dD", icon = icon("󰕒", "azure") },
+      { "<leader>dC", icon = icon("󰕒", "azure") },
       { "<leader>dq", icon = icon("󰆼", "azure") },
       { "<leader>dQ", icon = icon("󰆼", "azure") },
       { "<leader>dt", icon = icon("󰆓", "azure") },
