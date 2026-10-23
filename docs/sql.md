@@ -51,7 +51,9 @@ knows nothing about dadbod, `sqlcmd` or connections, and has its own specs in
   disk or has an unsaved buffer, because the deploy reads the disk. A file going into `icsMaster` is deployed to every
   server of the repo that has that database (dgsql: datagroup *and* billing/
   crocus) — `mssql.target.other_servers`; only when the connection came from the
-  rules, not with `!` or an explicit connection name. In a persistent query
+  rules, not with `!` or an explicit connection name. `Alter/**` scripts are the
+  exception: they go to one server only, even with `-- master` — a one-off data
+  or schema change, run twice, is a second change nobody asked for. In a persistent query
   (`<leader>dt`) the connection and database come from its `b:sqlctx` (the
   `-- sqlquery:` line), not from the rules: the file lives outside any repo,
   and the rules would just ask.
