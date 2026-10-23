@@ -249,6 +249,9 @@ files one by one via `mssql.query.export_files`, each next to its source and by
 its own rules, without opening anything. A file's BOM stays in the first buffer
 line as text (`fileencodings` has no `ucs-bom`, some files even carry two), and
 once `SET NOCOUNT ON;` is prepended the server sees it as `Incorrect syntax
-near '?'` — so leading BOMs are stripped. Note that the dgsql
+near '?'` — so leading BOMs are stripped. The same goes for choosing a connection
+(`bind`, which inserts the `-- sqlquery:` header above the first line): without
+the strip the BOM ends up in line 2 of the file, and the server reports `Line 2 ...
+near '?'`. Note that the dgsql
 dev server reports itself as `EXPRESS-DEV\SNICKERS` (`@@servername`) — that
 is not the esql box (`tank22`).

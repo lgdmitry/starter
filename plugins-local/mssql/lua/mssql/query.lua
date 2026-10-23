@@ -276,11 +276,14 @@ local function bind(buf, conn, database, file)
     pcall(vim.api.nvim_buf_set_name, buf, scratch_name(buf, conn.name, database))
   elseif vim.b[buf].sqlquery == "file" then
     local header = M.header(ctx)
-    local first = vim.api.nvim_buf_get_lines(buf, 0, 1, false)[1]
-    if M.parse_header(first) then
+    -- BOM в первой строке снимаем до вставки: иначе после неё он окажется во второй
+    -- строке, и сервер ответит «near '?'» (см. export_lines)
+    local first = vim.api.nvim_buf_get_lines(buf, 0, 1, false)[1] or ""
+    local bare = first:gsub("^\239\187\191", "")
+    if M.parse_header(bare) then
       vim.api.nvim_buf_set_lines(buf, 0, 1, false, { header })
     else
-      vim.api.nvim_buf_set_lines(buf, 0, 0, false, { header })
+      vim.api.nvim_buf_set_lines(buf, 0, 1, false, { header, bare })
     end
     -- сразу на диск: иначе смена подключения потерялась бы вместе с несохранённым
     -- буфером, а следующий запуск пошёл бы по старой строке
