@@ -506,6 +506,109 @@ describe(":SqlExport", function()
   )
 end)
 
+describe(":SqlRun по секциям", function()
+  local BUF = {
+    "-- sqlquery: dgsql_dev/datagroup",
+    "select 1",
+    "",
+    "-- sqlquery: dgsql_test/datagroup",
+    "select 2",
+    "",
+  }
+
+  it(
+    "заголовки режут диапазон, начало диапазона берёт заголовок выше",
+    function()
+      local q = setup()
+      local function shape(list)
+        return vim.tbl_map(function(s)
+          return { s.ctx and s.ctx.conn, s.line, s.lines }
+        end, list)
+      end
+      eq(
+        { { "dgsql_dev", 1, { "select 1", "" } }, { "dgsql_test", 4, { "select 2", "" } } },
+        shape(q.sections(BUF, 1, 6))
+      )
+      eq(
+        { { "dgsql_test", 4, { "select 2" } } },
+        shape(q.sections(BUF, 5, 5)),
+        "середина второй секции"
+      )
+      eq(
+        { { "dgsql_test", 4, { "select 2" } } },
+        shape(q.sections(BUF, 3, 5)),
+        "пустой хвост первой выкинут"
+      )
+      eq(
+        { { nil, 0, { "select 0" } }, { "dgsql_dev", 2, { "select 1" } } },
+        shape(q.sections({ "select 0", "-- sqlquery: dgsql_dev/datagroup", "select 1" }, 1, 3)),
+        "текст до первого заголовка"
+      )
+    end
+  )
+
+  local function stub_run(q)
+    local sql = require("mssql.conn")
+    sql.ensure = function()
+      return true
+    end
+    local runs, shown = {}, nil
+    sql.run = function(o, cb)
+      runs[#runs + 1] = { o.conn.name .. "/" .. o.db, o.lines }
+      cb(0, "n\n" .. #runs .. "\n\n")
+    end
+    require("mssql.win").show = function(o)
+      shown = o
+    end
+    return runs, function()
+      return shown
+    end
+  end
+
+  it(
+    "каждая секция — на своём подключении, ответы одним окном",
+    function()
+      local q = setup()
+      vim.api.nvim_buf_set_lines(0, 0, -1, false, BUF)
+      local runs, shown = stub_run(q)
+      q.run({ range = 0, bang = false })
+      eq({ { "dgsql_dev/datagroup", { "select 1", "" } }, { "dgsql_test/datagroup", { "select 2", "" } } }, runs)
+      eq("-- sqlquery: dgsql_dev/datagroup\nn\n1\n\n-- sqlquery: dgsql_test/datagroup\nn\n2\n", shown().text)
+      eq({ conn = "dgsql_dev", db = "datagroup" }, { conn = shown().ctx.conn, db = shown().ctx.db })
+      vim.cmd("silent edit!")
+    end
+  )
+
+  it(
+    "неизвестное подключение — не выполняется ничего; с ! заголовки не в счёт",
+    function()
+      local q = setup()
+      vim.api.nvim_buf_set_lines(0, 0, -1, false, BUF)
+      vim.api.nvim_buf_set_lines(0, 3, 4, false, { "-- sqlquery: nope/datagroup" })
+      local runs = stub_run(q)
+      q.run({ range = 0, bang = false })
+      eq({}, runs)
+      answer({ "crocus_dev", "Crocus" })
+      q.run({ range = 0, bang = true })
+      eq(1, #runs)
+      eq("crocus_dev/Crocus", runs[1][1])
+      vim.cmd("silent edit!")
+    end
+  )
+
+  it(
+    "файл без заголовков ниже первой строки — как раньше, одним запросом",
+    function()
+      local q = setup()
+      vim.api.nvim_buf_set_lines(0, 0, -1, false, { "select 1", "select 2" })
+      local runs = stub_run(q)
+      q.run({ range = 0, bang = false })
+      eq({ { "dgsql_dev/ics_ua97", { "select 1", "select 2" } } }, runs)
+      vim.cmd("silent edit!")
+    end
+  )
+end)
+
 describe(":SqlConn в обычном файле", function()
   it("записывает цель первой строкой, повторно — заменяет", function()
     local q = setup()

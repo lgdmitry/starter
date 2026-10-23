@@ -44,6 +44,8 @@
 -- <leader>ds (:SqlConn) меняет его подключение и базу, а q закрывает окно, как и в окне
 -- с ответом (ценой записи макросов: в черновике запроса она нужна реже, чем закрыть его
 -- тем же движением, что и ответ); постоянный запрос q сохраняет и закрывает совсем. С ! (:SqlQuery!, :SqlRun!) спрашиваются подключение и база.
+-- Строка `-- sqlquery: conn/db` ниже первой начинает секцию со своим подключением —
+-- :SqlRun выполняет секции каждую там, а ответы показывает одним окном (M.sections).
 
 local sql = require("mssql.conn")
 local target = require("mssql.target")
@@ -615,15 +617,136 @@ function M.switch()
   end)
 end
 
+---Секции строк line1..line2 буфера: заголовок `-- sqlquery: conn/db` в любом месте
+---начинает новую, и до следующего заголовка запрос идёт туда — так в одном файле
+---держат один и тот же запрос к dev и test и сравнивают ответы. Диапазон с середины
+---секции берёт цель ближайшего заголовка выше. Строка заголовка в запрос не попадает,
+---пустые секции выкидываются.
+---@return { ctx: table?, line: integer, lines: string[] }[] ctx = nil — заголовка выше
+---нет (цель по обычным правилам); line — строка заголовка (0 — без него)
+function M.sections(all, line1, line2)
+  local function header(i)
+    local text = all[i] or ""
+    return M.parse_header(i == 1 and text:gsub("^\239\187\191", "") or text)
+  end
+  local cur = { line = 0, lines = {} }
+  for i = line1, 1, -1 do
+    local ctx = header(i)
+    if ctx then
+      cur = { ctx = ctx, line = i, lines = {} }
+      break
+    end
+  end
+  local list = { cur }
+  for i = line1, line2 do
+    local ctx = header(i)
+    if ctx then
+      if i ~= cur.line then
+        cur = { ctx = ctx, line = i, lines = {} }
+        list[#list + 1] = cur
+      end
+    else
+      cur.lines[#cur.lines + 1] = all[i]
+    end
+  end
+  return vim.tbl_filter(function(s)
+    return vim.trim(table.concat(s.lines, "\n")) ~= ""
+  end, list)
+end
+
+---Выполнить секции по очереди, каждую на своём подключении, и показать ответы одним
+---окном — под заголовками секций, чтобы было видно, какой ответ откуда. По очереди, а
+---не разом: крутилка одна, и <leader>dc обрывает цепочку целиком (после отмены
+---колбэк sql.run не зовётся, и следующая секция не стартует).
+---default — подключение и база для секции без заголовка.
+local function run_sections(sections, default)
+  local file = (vim.b.sqlctx or {}).file or vim.api.nvim_buf_get_name(0)
+  local list = sql.connections(file)
+  -- подключения проверяем все сразу: выполнить половину и споткнуться на опечатке
+  -- во втором заголовке хуже, чем не начинать
+  for _, s in ipairs(sections) do
+    if s.ctx then
+      s.conn, s.db = sql.by_name(list, s.ctx.conn), s.ctx.db
+      if not s.conn then
+        return notify(
+          ("нет подключения %s (строка %d)"):format(s.ctx.conn, s.line),
+          vim.log.levels.ERROR
+        )
+      end
+    else
+      s.conn, s.db = default.conn, default.db
+    end
+  end
+  local out = {}
+  local function step(i)
+    local s = sections[i]
+    if not s then
+      local first = sections[1]
+      return sqlwin.show({
+        kind = "query",
+        title = ("запрос @ %d секций"):format(#sections),
+        text = table.concat(out, "\n"),
+        ctx = { file = file, conn = first.conn.name, db = first.db },
+        filetype = "",
+        bottom = true,
+      })
+    end
+    sql.run({
+      conn = s.conn,
+      db = s.db,
+      lines = s.lines,
+      opts = { width = 8000, trunc = M.column_width },
+      progress = ("выполняется на %s/%s (%d из %d)… (<leader>dc — отменить)"):format(
+        s.conn.name,
+        s.db,
+        i,
+        #sections
+      ),
+      title = "SqlQuery",
+    }, function(code, text)
+      if code ~= 0 then
+        notify(("sqlcmd вернул %d (%s/%s)"):format(code, s.conn.name, s.db), vim.log.levels.ERROR)
+      end
+      out[#out + 1] = M.header({ conn = s.conn.name, db = s.db })
+      out[#out + 1] = (text:gsub("%s+$", "")) .. "\n"
+      step(i + 1)
+    end)
+  end
+  step(1)
+end
+
 ---:SqlRun — выполнить буфер целиком или строки диапазона (в визуальном режиме — выделение).
+---Есть заголовки `-- sqlquery:` ниже первой строки — по секциям (M.sections), каждая
+---на своём подключении; с ! заголовки не в счёт, всё уходит туда, куда выбрали.
 function M.run(opts)
   if not sql.ensure("SqlQuery") then
     return
   end
-  local lines = opts.range > 0 and vim.api.nvim_buf_get_lines(0, opts.line1 - 1, opts.line2, false)
-    or vim.api.nvim_buf_get_lines(0, 0, -1, false)
+  local all = vim.api.nvim_buf_get_lines(0, 0, -1, false)
+  local line1, line2 = 1, #all
+  if opts.range > 0 then
+    line1, line2 = opts.line1, opts.line2
+  end
+  local lines = vim.list_slice(all, line1, line2)
   if vim.trim(table.concat(lines, "\n")) == "" then
     return notify("нечего выполнять", vim.log.levels.WARN)
+  end
+
+  local sections = M.sections(all, line1, line2)
+  local split, bare = false, false
+  for _, s in ipairs(sections) do
+    split = split or s.line > 1
+    bare = bare or not s.ctx
+  end
+  if split and not opts.bang then
+    if not bare then
+      return run_sections(sections)
+    end
+    -- текст до первого заголовка (в файле без заголовка в первой строке) — туда же,
+    -- куда пошёл бы весь файл
+    return pick(false, function(conn, database)
+      run_sections(sections, { conn = conn, db = database })
+    end)
   end
 
   pick(opts.bang, function(conn, database, file)

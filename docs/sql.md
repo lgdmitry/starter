@@ -91,7 +91,15 @@ knows nothing about dadbod, `sqlcmd` or connections, and has its own specs in
   inherits its connection instead of the rules.
   `:SqlRun` (`<leader>dx`, or `<F5>` in any mode, insert included — it
   overrides the deploy `<F5>` in query buffers) runs it, or the visual
-  selection in any sql buffer.
+  selection in any sql buffer. A `-- sqlquery: conn/db` line *below* the
+  first one starts a section that runs on its own connection
+  (`mssql.query.sections`): the same query against dev and test in one file,
+  answers in one window, each under its section's header. Sections run one
+  after another (`<leader>dc` stops the rest); a selection starting mid-section
+  takes the header above it; an unknown connection in any header runs nothing;
+  `!` ignores the headers and sends everything to the picked connection. Only
+  `:SqlRun` reads them — deploy, `K`, completion and the status line still go
+  by the first line.
 - `plugins-local/sqlkit/lua/sqlkit/format.lua` — `:SqlFormat` (`<leader>df`, operator in normal
   mode, selection in visual; sql buffers only): format T-SQL by the dgsql/esql
   standard (skill `mssql-repo-skills:sql-standards`, `tsql-style.md`). Only the
