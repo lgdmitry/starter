@@ -97,6 +97,9 @@ return {
         },
         files = vim.tbl_deep_extend("force", vim.deepcopy(by_mtime), vim.deepcopy(deploy)),
         git_files = vim.tbl_deep_extend("force", vim.deepcopy(by_mtime), vim.deepcopy(deploy)),
+        -- <leader>gs: выложить прямо из списка изменённых. Tab в строке поиска здесь
+        -- занят git_stage, поэтому без выделения берётся файл под курсором.
+        git_status = vim.deepcopy(deploy),
         -- дефолт explorer рисует превью в узкой (40 колонок) панели под деревом;
         -- preview = "main" вместо неё показывает файл в главном окне редактора
         explorer = vim.tbl_deep_extend("force", { layout = { preview = "main" }, hidden = true }, vim.deepcopy(deploy)),
